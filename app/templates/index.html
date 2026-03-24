@@ -1,0 +1,134 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <title>AI NPC 调试面板</title>
+    <style>
+      body {
+        font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue",
+          Arial, "Noto Sans", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
+        margin: 24px;
+        color: #111;
+      }
+      .row {
+        margin: 12px 0;
+      }
+      label {
+        display: inline-block;
+        min-width: 80px;
+        font-weight: 600;
+      }
+      input[type="text"] {
+        width: 320px;
+        max-width: 100%;
+        padding: 8px 10px;
+        border: 1px solid #ddd;
+        border-radius: 6px;
+      }
+      textarea {
+        width: 640px;
+        max-width: 100%;
+        height: 120px;
+        padding: 8px 10px;
+        border: 1px solid #ddd;
+        border-radius: 6px;
+      }
+      button {
+        padding: 10px 14px;
+        border: 0;
+        border-radius: 8px;
+        background: #2f6fed;
+        color: #fff;
+        cursor: pointer;
+        font-weight: 700;
+      }
+      pre {
+        background: #f7f7f9;
+        padding: 12px;
+        border-radius: 8px;
+        overflow: auto;
+        max-width: 100%;
+      }
+      .hint {
+        color: #666;
+        font-size: 12px;
+        margin-top: 6px;
+      }
+    </style>
+  </head>
+  <body>
+    <h2>AI NPC 调试面板</h2>
+    <div class="hint">
+      这个页面用于手动测试后端的 <code>POST /chat</code> 接口。填好输入后点击发送，展示后端返回的动作 JSON。
+    </div>
+
+    <div class="row">
+      <label for="playerId">player_id</label>
+      <input id="playerId" type="text" value="player_001" />
+    </div>
+
+    <div class="row">
+      <label for="npcId">npc_id</label>
+      <input id="npcId" type="text" value="npc_1" />
+    </div>
+
+    <div class="row">
+      <label for="location">location</label>
+      <input id="location" type="text" value="村口" />
+    </div>
+
+    <div class="row">
+      <label for="time">time</label>
+      <input id="time" type="text" value="早晨" />
+    </div>
+
+    <div class="row">
+      <label for="message">message</label>
+      <textarea id="message">你好！我们村今天有什么新消息吗？</textarea>
+    </div>
+
+    <div class="row">
+      <button id="sendBtn">发送到 /chat</button>
+    </div>
+
+    <h3>返回结果</h3>
+    <pre id="result">{}</pre>
+
+    <script>
+      const $ = (id) => document.getElementById(id);
+
+      async function sendChat() {
+        const payload = {
+          player_id: $("playerId").value,
+          npc_id: $("npcId").value,
+          message: $("message").value,
+          scene_info: {
+            location: $("location").value,
+            time: $("time").value
+          }
+        };
+
+        $("result").textContent = "loading...";
+
+        const res = await fetch("/chat", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(payload)
+        });
+
+        let data;
+        try {
+          data = await res.json();
+        } catch (e) {
+          data = { error: "Response is not JSON" };
+        }
+
+        $("result").textContent = JSON.stringify(data, null, 2);
+      }
+
+      $("sendBtn").addEventListener("click", sendChat);
+    </script>
+  </body>
+</html>
+

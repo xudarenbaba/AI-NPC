@@ -1,0 +1,31 @@
+# 依赖与虚拟环境
+venv/
+.venv/
+env/
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+dist/
+build/
+
+# 配置与密钥（勿提交真实 api_key）
+config.yaml
+config.local.yaml
+.env
+.env.local
+
+# 数据与模型
+data/
+models/
+*.db
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# 日志
+*.log
+logs/
