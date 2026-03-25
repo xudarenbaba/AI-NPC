@@ -163,15 +163,19 @@ def build_agent_graph():
         state["messages"] = new_messages
         return state
 
-    def route_from_agent(state: AgentState) -> Literal["tools", "store_memory", "__end__"]:
+    def route_from_agent(state: AgentState) -> Literal["tools", "store_memory", "END"]:
+        # 有最终 action：直接写回记忆并结束
         if state.get("action") is not None:
             return "store_memory"
+        # 有 tool_calls：继续执行工具并回到 agent
         messages = state.get("messages") or []
         if messages and (messages[-1] or {}).get("tool_calls"):
             return "tools"
-        return "__end__"
+        # 正常情况下不会走到这里（agent 已兜底 action），但为了安全：结束图运行
+        return "END"
 
-    def route_from_tools(state: AgentState) -> Literal["agent", "store_memory", "__end__"]:
+    def route_from_tools(state: AgentState) -> Literal["agent", "store_memory", "END"]:
+        # tools 节点若已产生最终 action，则进入写回
         if state.get("action") is not None:
             return "store_memory"
         return "agent"

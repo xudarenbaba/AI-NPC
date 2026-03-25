@@ -57,7 +57,8 @@ def create_app(config_path: str | None = None) -> Flask:
                     "npc_id": req.npc_id,
                     "message": req.message,
                     "scene_info": req.scene_info or {},
-                }
+                },
+                {"recursion_limit": 20},
             )
             action = state.get("action")
             if action is None:

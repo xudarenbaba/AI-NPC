@@ -154,7 +154,6 @@ python scripts/import_lore.py
   - `__init__.py`：导出记忆模块。
   - `short_term.py`：短期记忆模块（当前 LangGraph 主链路未接入，保留供后续扩展）。
   - `long_term.py`：长期记忆与 RAG（ChromaDB 持久化，提供 `search()` / `add_documents()`）。
-  - `consolidation.py`：旧的沉淀封装（当前主链路由 LangGraph 节点 `store_memory` 直接写回 ChromaDB，不再走该旧入口）。
 - `app/integrations/`
   - `mcp_client.py`：MCP 客户端封装，使用 stdio 连接 `npc_mcp/local_server.py`，提供 `list_tools()` / `call_tool()`。
 - `app/reasoning/`（推理）
@@ -213,7 +212,7 @@ python run.py
 
 1. 前端（游戏客户端）向后端发送 `POST /chat`，JSON 输入：`player_id`、`message`、可选 `scene_info`、可选 `npc_id`。
 2. `app/main.py` 的 `/chat` 路由处理函数读取 JSON 并构建 `ChatRequest`。
-3. 路由函数调用 `agent_graph.invoke(...)`（`app/langgraph_agent.py` 中的 LangGraph 图编排）并把输入放进图的 `state`。
+3. 路由函数调用 `agent_graph.invoke(...)`（`app/langgraph_agent.py` 中的 LangGraph 图编排）并把输入放进图的 `state`；同时传入 `recursion_limit` 用于防止无限循环。
 4. LangGraph 节点 `retrieve`：调用 `LongTermMemory.search()`（内部使用 sentence-transformers + ChromaDB）  
    - 输入：`player_id / npc_id / message / scene_info`  
    - 输出：`state.long_term_chunks: list[str]`
@@ -249,7 +248,7 @@ python run.py
 ```
 3. 后端处理与调用函数链路（一次请求的关键路径）：
    1. `app/main.py` `/chat`：读取 JSON -> 调用 `agent_graph.invoke()`  
-   2. `app/langgraph_agent.py`：`retrieve(LongTermMemory.search)` -> `build_prompt(build_messages)` -> `prepare_tools(build_tooling)` -> `agent(llm_step_with_tools) <-> tools(run_tool_call)` -> `store_memory(LongTermMemory.add_documents)`  
+   2. `app/langgraph_agent.py`：`retrieve(LongTermMemory.search)` -> `get_short_term_history(ShortTermMemory.get_recent)` -> `build_prompt(build_messages)` -> `prepare_tools(build_tooling)` -> `agent(llm_step_with_tools) <-> tools(run_tool_call)` -> `store_memory(LongTermMemory.add_documents)` -> `update_short_term(ShortTermMemory.add_turn)`  
    3. `app/reasoning/llm.py`：提供单步 LLM 调用与工具执行函数；循环/决策由 LangGraph 条件边控制  
 4. 响应体（200，JSON，示例）：  
 ```json
