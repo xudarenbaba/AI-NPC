@@ -1,22 +1,22 @@
 # AI NPC 后端
 
-为游戏中的 NPC 提供具备**长期记忆、世界观感知与结构化动作决策**的 AI 后端。采用 RAG + Function Calling，与游戏引擎通过 HTTP JSON 对接。
+为游戏中的 NPC 提供具备**长期记忆、世界观感知与结构化动作决策**的 AI 后端。使用 **LangGraph 编排**串联：RAG(ChromaDB) -> Prompt -> LLM Function Calling -> 写回 ChromaDB，与游戏引擎通过 HTTP JSON 对接。
 
-## 架构概览
+## 架构概览（LangGraph 主链路）
 
 ```
-游戏客户端 (前端)  ←—— HTTP POST /chat (JSON) ——→  AI 决策端 (本服务)
-       ↓                                                    ↓
-  画面 / 输入                                    短期记忆 + 长期记忆 (ChromaDB)
-       ↓                                                    ↓
-  解析动作 JSON 执行表现                         LLM (DeepSeek) → 结构化动作
+游戏客户端 (前端) ←—— HTTP POST /chat(JSON) ——→ AI 决策端(Flask，本服务)
+                                             ↓
+                                 LangGraph 图编排主流程
+                             retrieve(RAG) -> build_prompt -> run_llm -> store_memory
+                                             ↓
+                                    LLM(Function Calling)输出标准动作 JSON
 ```
 
-- **Gateway**：`POST /chat` 接收 `player_id`、`message`、`scene_info`，返回动作 JSON。
-- **短期记忆**：进程内保留最近 N 轮对话，保证上下文连贯。
-- **长期记忆 (RAG)**：ChromaDB 存世界观 (Lore) 与玩家交互摘要，按语义检索召回。
-- **推理**：System Prompt + 召回记忆 + 对话历史 → LLM（Function Calling）→ 标准动作 JSON。
-- **沉淀**：每轮结束后将本轮对话写入长期记忆，供后续检索。
+- **Gateway**：`POST /chat` 接收 `player_id`、`message`、`scene_info`、可选 `npc_id`，返回动作 JSON。
+- **RAG 检索**：ChromaDB(长期记忆) 按语义检索召回相关片段（世界观 Lore + 交互记忆）。
+- **推理**：把召回片段拼入 system/user prompt，要求模型通过 `npc_action` 工具输出结构化动作。
+- **写回沉淀**：根据 `use_consolidation` 配置，把本轮交互写回 ChromaDB（供后续 RAG 检索）。
 
 ## 本地运行
 
@@ -32,8 +32,8 @@ pip install -r requirements.txt
 
 ### 2. 配置
 
-- 复制 `config.example.yaml` 为 `config.yaml`。
-- 在 `config.yaml` 中填写 LLM 的 `api_key`，或设置环境变量 `AI_NPC_LLM_API_KEY`。
+- 确保项目根目录存在 `config.yaml`（其字段结构来源于 `app/config.py` 的默认配置）。
+- 在 `config.yaml` 中填写 `llm.api_key`，或设置环境变量 `AI_NPC_LLM_API_KEY`（环境变量优先生效）。
 - **不要将包含真实 api_key 的 config.yaml 提交到仓库。**
 
 ### 3. 启动服务
@@ -121,6 +121,7 @@ python scripts/import_lore.py
 ## 技术栈
 
 - **Web**：Flask
+- **编排**：LangGraph
 - **LLM**：DeepSeek API（OpenAI 兼容）
 - **向量库**：ChromaDB
 - **嵌入**：sentence-transformers (BAAI/bge-small-zh-v1.5)
@@ -132,8 +133,7 @@ python scripts/import_lore.py
 ## 项目目录与文件作用
 
 ### 根目录
-- `config.yaml`：运行配置（LLM、嵌入模型、ChromaDB 持久化目录、短期/长期记忆参数等）。建议不要提交真实 `api_key`。
-- `config.example.yaml`：配置示例（用于复制后自行填写密钥）。
+- `config.yaml`：运行配置（LLM、嵌入模型、ChromaDB 持久化目录、RAG/沉淀相关参数等）。建议不要提交真实 `api_key`。
 - `requirements.txt`：Python 依赖列表。
 - `run.py`：Flask 启动入口，启动 `app.main.create_app()`，监听 `0.0.0.0:5000`。
 - `README.md`：项目说明。
@@ -142,6 +142,7 @@ python scripts/import_lore.py
 ### `app/`
 - `app/__init__.py`：包初始化文件（用于 Python 模块识别）。
 - `app/config.py`：加载 `config.yaml`，并支持环境变量 `AI_NPC_LLM_API_KEY` 覆盖敏感的 LLM `api_key`。
+- `app/langgraph_agent.py`：LangGraph 主链路编排实现（retrieve -> build_prompt -> run_llm -> store_memory）。
 - `app/main.py`：Web Gateway 与路由实现。
   - `GET /health`：健康检查。
   - `POST /chat`：核心对话接口（接收状态 -> 组装 prompt -> 调用 LLM -> 输出动作 JSON -> 记忆更新与沉淀）。
@@ -149,21 +150,27 @@ python scripts/import_lore.py
   - `__init__.py`：导出请求/响应相关类型（便于外部模块直接导入）。
   - `request.py`：定义 `/chat` 请求体结构 `ChatRequest`。
   - `response.py`：定义后端返回动作结构 `ActionResponse`（`action_type`、`dialogue`、`emotion`、`target_id`、`extra`）。
-- `app/memory/`（双轨记忆）
-  - `__init__.py`：导出短期/长期记忆类。
-  - `short_term.py`：短期记忆（进程内，按 `player_id + npc_id` 分桶，保留最近 N 轮）。
-  - `long_term.py`：长期记忆与 RAG（ChromaDB 持久化，既检索交互摘要，也检索 Lore）。
-  - `consolidation.py`：记忆沉淀（每轮对话结束后把摘要/关键内容写入 ChromaDB，供后续 RAG 检索）。
+- `app/memory/`
+  - `__init__.py`：导出记忆模块。
+  - `short_term.py`：短期记忆模块（当前 LangGraph 主链路未接入，保留供后续扩展）。
+  - `long_term.py`：长期记忆与 RAG（ChromaDB 持久化，提供 `search()` / `add_documents()`）。
+  - `consolidation.py`：旧的沉淀封装（当前主链路由 LangGraph 节点 `store_memory` 直接写回 ChromaDB，不再走该旧入口）。
+- `app/integrations/`
+  - `mcp_client.py`：MCP 客户端封装，使用 stdio 连接 `npc_mcp/local_server.py`，提供 `list_tools()` / `call_tool()`。
 - `app/reasoning/`（推理）
   - `__init__.py`：导出推理相关方法（prompt/llm 调用）。
-  - `prompts.py`：将“场景信息 + 短期历史 + RAG 召回内容”组装成发送给 LLM 的消息（system/user）。
+  - `prompts.py`：把“场景信息 + RAG 召回内容 + 当前玩家消息”组装成发送给 LLM 的消息（system/user）。
   - `llm.py`：调用 DeepSeek（OpenAI 兼容接口）并使用 Function Calling 输出结构化动作。
 - `app/tools/`（本地工具）
   - `location_tools.py`：本地地点解析工具，输入地点字符串返回预置坐标。
+  - `npc_state_tools.py`：本地 NPC 状态工具（被本地工具链路或 MCP 工具共享）。
   - `__init__.py`：导出本地工具。
 
 ### `lore/`
 - `world.md`：世界观示例文本。该目录下的 `.md` 会被 `scripts/import_lore.py` 导入到 ChromaDB 的 `lore` 集合。
+
+### `app/templates/`
+- `index.html`：`GET /` 的最简页面（仅用于调试，通常不参与 `/chat` 主链路）。
 
 ### `scripts/`
 - `import_lore.py`：把 `lore/` 下的文本切片后写入 ChromaDB（用于 RAG 的 lore 检索）。
@@ -204,21 +211,45 @@ python run.py
 
 ## 一次 /chat 请求的执行链路
 
-1. 游戏客户端向后端发送 `POST /chat`，携带 `player_id`、`message`、可选 `scene_info`、可选 `npc_id`。
-2. `app/main.py` 解析并校验请求，构建 `ChatRequest`。
-3. `ShortTermMemory.get_recent()` 获取该玩家（与 NPC）最近 N 轮对话。
-4. 若 `use_rag=true`：
-   - `LongTermMemory.search()` 基于当前 `message`（+ `scene_info`）做语义检索
-   - 检索交互摘要（按 `player_id` 过滤）+ Lore（不按玩家过滤）
-5. `prompts.build_messages()` 将：
-   - system：NPC 角色指令 + 长期记忆片段（RAG 召回）
-   - user：场景信息 + 短期历史 + 当前玩家消息
-   组装为发给 LLM 的 messages。
-6. `llm.call_llm_with_tools()` 调用 DeepSeek（OpenAI 兼容接口），并通过 Function Calling 要求输出 `npc_action`。
-7. `llm.py` 解析 tool call 的 `arguments`，映射为 `ActionResponse`（其中 `dialogue` 为必填）。
-8. 更新短期记忆：
-   - 写入本轮 `user`（玩家消息）
-   - 写入本轮 `assistant`（NPC 回复）
-9. 若 `use_consolidation=true`：
-   - `consolidation.consolidate_turn()` 将本轮“玩家说/ NPC 回复（可附带场景）”写入 ChromaDB 的长期记忆（`kbase` 集合）。
-10. 返回 `ActionResponse` 的 JSON 给游戏客户端，游戏引擎据此执行对话/动作表现。
+1. 前端（游戏客户端）向后端发送 `POST /chat`，JSON 输入：`player_id`、`message`、可选 `scene_info`、可选 `npc_id`。
+2. `app/main.py` 的 `/chat` 路由处理函数读取 JSON 并构建 `ChatRequest`。
+3. 路由函数调用 `agent_graph.invoke(...)`（`app/langgraph_agent.py` 中的 LangGraph 图编排）并把输入放进图的 `state`。
+4. LangGraph 节点 `retrieve`：调用 `LongTermMemory.search()`（内部使用 sentence-transformers + ChromaDB）  
+   - 输入：`player_id / npc_id / message / scene_info`  
+   - 输出：`state.long_term_chunks: list[str]`
+5. LangGraph 节点 `build_prompt`：调用 `build_messages()` 组装给 LLM 的 `messages`  
+   - 输入：`message / npc_id / scene_info / long_term_chunks`  
+   - 输出：`state.messages`
+6. LangGraph 节点 `run_llm`：调用 `call_llm_with_tools()`（工具调用解析仍在 `app/reasoning/llm.py` 内实现）  
+   - 模型触发 `tool_calls` 时：执行本地工具 `resolve_location_coordinates` / `get_npc_runtime_state_local`，并在启用 MCP 时通过 `MCPToolClient.call_tool()` 访问 MCP 工具。  
+   - 输出：`state.action: ActionResponse`
+7. LangGraph 节点 `store_memory`：当 `use_consolidation=true` 时调用 `LongTermMemory.add_documents()` 把本轮交互写回 ChromaDB。  
+   - 输出：ChromaDB 落盘（`state.action` 不变）
+8. 返回 `ActionResponse` 的 JSON 给游戏客户端，游戏引擎据此执行对话/动作表现。
+
+## 全链路调用示例（从前端到输出）
+
+1. 前端调用接口：`POST http://localhost:5000/chat`
+2. 请求体（JSON）：  
+```json
+{
+  "player_id": "player_001",
+  "message": "你好，今天天气怎么样？",
+  "scene_info": { "location": "村口", "time": "早晨" },
+  "npc_id": "npc_merchant_001"
+}
+```
+3. 后端处理与调用函数链路（一次请求的关键路径）：
+   1. `app/main.py` `/chat`：读取 JSON -> 调用 `agent_graph.invoke()`  
+   2. `app/langgraph_agent.py`：`retrieve(LongTermMemory.search)` -> `build_prompt(build_messages)` -> `run_llm(call_llm_with_tools)` -> `store_memory(LongTermMemory.add_documents)`  
+   3. `app/reasoning/llm.py`：当 LLM 产生 `tool_calls` 时，实际执行本地工具或 MCP 工具，然后把结果映射为 `ActionResponse`  
+4. 响应体（200，JSON，示例）：  
+```json
+{
+  "action_type": "dialogue",
+  "dialogue": "早上好，今天天气不错，适合出门走走。",
+  "emotion": "friendly",
+  "target_id": null,
+  "extra": null
+}
+```
