@@ -163,7 +163,7 @@ def build_agent_graph():
         state["messages"] = new_messages
         return state
 
-    def route_from_agent(state: AgentState) -> Literal["tools", "store_memory", "END"]:
+    def route_from_agent(state: AgentState):
         # 有最终 action：直接写回记忆并结束
         if state.get("action") is not None:
             return "store_memory"
@@ -172,9 +172,9 @@ def build_agent_graph():
         if messages and (messages[-1] or {}).get("tool_calls"):
             return "tools"
         # 正常情况下不会走到这里（agent 已兜底 action），但为了安全：结束图运行
-        return "END"
+        return END
 
-    def route_from_tools(state: AgentState) -> Literal["agent", "store_memory", "END"]:
+    def route_from_tools(state: AgentState):
         # tools 节点若已产生最终 action，则进入写回
         if state.get("action") is not None:
             return "store_memory"
@@ -227,14 +227,12 @@ def build_agent_graph():
     graph_builder.add_node("update_short_term", update_short_term)
 
     graph_builder.set_entry_point("retrieve")
-    graph_builder.add_edge("retrieve", "build_prompt")
     graph_builder.add_edge("retrieve", "get_short_term_history")
     graph_builder.add_edge("get_short_term_history", "build_prompt")
     graph_builder.add_edge("build_prompt", "prepare_tools")
     graph_builder.add_edge("prepare_tools", "agent")
     graph_builder.add_conditional_edges("agent", route_from_agent)
     graph_builder.add_conditional_edges("tools", route_from_tools)
-    graph_builder.add_edge("store_memory", END)
     graph_builder.add_edge("store_memory", "update_short_term")
     graph_builder.add_edge("update_short_term", END)
 

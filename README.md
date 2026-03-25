@@ -8,7 +8,7 @@
 游戏客户端 (前端) ←—— HTTP POST /chat(JSON) ——→ AI 决策端(Flask，本服务)
                                              ↓
                                  LangGraph 图编排主流程
-                   retrieve(RAG) -> build_prompt -> prepare_tools -> agent <-> tools -> store_memory
+                   retrieve(RAG) -> get_short_term_history -> build_prompt -> prepare_tools -> agent <-> tools -> store_memory -> update_short_term
                                              ↓
                                     LLM(Function Calling)输出标准动作 JSON
 ```
@@ -143,6 +143,7 @@ python scripts/import_lore.py
 - `app/__init__.py`：包初始化文件（用于 Python 模块识别）。
 - `app/config.py`：加载 `config.yaml`，并支持环境变量 `AI_NPC_LLM_API_KEY` 覆盖敏感的 LLM `api_key`。
 - `app/langgraph_agent.py`：LangGraph 主链路编排实现（retrieve -> build_prompt -> run_llm -> store_memory）。
+- `app/langgraph_agent.py`：LangGraph 主链路编排实现（retrieve -> get_short_term_history -> build_prompt -> prepare_tools -> agent <-> tools -> store_memory -> update_short_term）。
 - `app/main.py`：Web Gateway 与路由实现。
   - `GET /health`：健康检查。
   - `POST /chat`：核心对话接口（接收状态 -> 组装 prompt -> 调用 LLM -> 输出动作 JSON -> 记忆更新与沉淀）。
