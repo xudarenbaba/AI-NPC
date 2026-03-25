@@ -9,7 +9,6 @@ from app.config import load_config
 from app.integrations.mcp_client import MCPToolClient
 from app.schemas.response import ActionResponse
 from app.tools.location_tools import resolve_location_coordinates
-from app.tools.npc_state_tools import get_npc_runtime_state_local
 
 logger = logging.getLogger(__name__)
 
@@ -64,21 +63,115 @@ RESOLVE_LOCATION_TOOL = {
     },
 }
 
-GET_NPC_RUNTIME_STATE_TOOL = {
-    "type": "function",
-    "function": {
-        "name": "get_npc_runtime_state",
-        "description": "获取 NPC 当前坐标、职业、任务、可行动作。",
-        "parameters": {
-            "type": "object",
-            "properties": {
-                "npc_id": {"type": "string", "description": "NPC 唯一标识"},
-            },
-            "required": ["npc_id"],
-        },
-    },
-}
 
+def build_tooling() -> tuple[list[dict[str, Any]], MCPToolClient | None, dict[str, dict[str, Any]]]:
+    """
+    构建 tools schema，并返回 MCP client（若启用且可用）与 MCP tools 映射。
+    重要：不做“本地共享状态工具”的回退，MCP 工具只能通过 MCP 调用。
+    """
+    tool_defs = [NPC_ACTION_TOOL, RESOLVE_LOCATION_TOOL]
+    mcp_client: MCPToolClient | None = None
+    mcp_tools_by_name: dict[str, dict[str, Any]] = {}
+    if _mcp_enabled():
+        try:
+            mcp_client = _build_mcp_client()
+            for t in mcp_client.list_tools():
+                name = t["name"]
+                mcp_tools_by_name[name] = t
+                tool_defs.append(
+                    {
+                        "type": "function",
+                        "function": {
+                            "name": name,
+                            "description": t.get("description", ""),
+                            "parameters": t.get("input_schema") or {"type": "object"},
+                        },
+                    }
+                )
+        except Exception as e:
+            logger.warning("MCP list_tools failed, MCP tools disabled for this run: %s", e)
+            mcp_client = None
+            mcp_tools_by_name = {}
+    return tool_defs, mcp_client, mcp_tools_by_name
+
+
+def llm_step_with_tools(
+    messages: list[dict[str, Any]],
+    tool_defs: list[dict[str, Any]],
+    temperature: float | None = None,
+    timeout: int | None = None,
+) -> dict[str, Any]:
+    """单步调用 LLM：返回一条可直接 append 到 messages 的 assistant message(dict)。"""
+    cfg = load_config()
+    llm = cfg.get("llm", {})
+    model = llm.get("model", "deepseek-chat")
+    temp = temperature if temperature is not None else llm.get("temperature", 0.2)
+    tout = timeout if timeout is not None else llm.get("timeout_s", 60)
+
+    client = _get_client()
+    resp = client.chat.completions.create(
+        model=model,
+        messages=messages,
+        tools=tool_defs,
+        temperature=temp,
+        timeout=tout,
+    )
+    choice = resp.choices[0] if resp.choices else None
+    if not choice or not choice.message:
+        return {"role": "assistant", "content": ""}
+
+    msg = choice.message
+    assistant_tool_calls: list[dict[str, Any]] = []
+    if msg.tool_calls:
+        for tc in msg.tool_calls:
+            fn = getattr(tc, "function", None)
+            if not fn:
+                continue
+            assistant_tool_calls.append(
+                {
+                    "id": tc.id,
+                    "type": "function",
+                    "function": {"name": fn.name, "arguments": fn.arguments or "{}"},
+                }
+            )
+
+    out: dict[str, Any] = {"role": "assistant", "content": (msg.content or "")}
+    if assistant_tool_calls:
+        out["tool_calls"] = assistant_tool_calls
+    return out
+
+
+def parse_tool_args(arguments: str | None) -> dict[str, Any]:
+    try:
+        return json.loads(arguments or "{}")
+    except Exception:
+        return {}
+
+
+def run_tool_call(
+    tool_name: str,
+    args: dict[str, Any],
+    *,
+    mcp_client: MCPToolClient | None,
+    mcp_tools_by_name: dict[str, dict[str, Any]],
+) -> dict[str, Any]:
+    """
+    执行除 npc_action 之外的工具调用，返回可序列化 dict。
+    - 本地工具：resolve_location_coordinates
+    - MCP 工具：必须来自 mcp_tools_by_name（不做本地回退）
+    """
+    if tool_name == "resolve_location_coordinates":
+        place_name = (args.get("place_name") or "").strip()
+        result = resolve_location_coordinates(place_name)
+        return result or {"error": "unknown place", "place_name": place_name}
+
+    if mcp_client is not None and tool_name in mcp_tools_by_name:
+        try:
+            return mcp_client.call_tool(tool_name, args)
+        except Exception as e:
+            return {"error": "mcp call failed", "tool_name": tool_name, "detail": str(e)}
+
+    return {"error": "unknown tool", "tool_name": tool_name}
 
 def _mcp_enabled() -> bool:
     cfg = load_config()
@@ -164,83 +257,37 @@ def call_llm_with_tools(
         except Exception as e:
             logger.warning("MCP list_tools failed, fallback to local tools only: %s", e)
             mcp_client = None
-    if mcp_client is None:
-        # MCP 不可用时退回本地状态工具，保证功能不中断
-        tool_defs.append(GET_NPC_RUNTIME_STATE_TOOL)
+    # 重要：不做“本地状态工具”回退。若 MCP 不可用，则不会提供 get_npc_runtime_state。
 
+    # 兼容旧入口：内部用“图外循环”，但新主链路不再使用该函数。
     working_messages = list(messages)
-
+    tool_defs, mcp_client, mcp_tools_by_name = build_tooling()
     for _ in range(4):
-        resp = client.chat.completions.create(
-            model=model,
-            messages=working_messages,
-            tools=tool_defs,
-            temperature=temp,
-            timeout=tout,
+        assistant_msg = llm_step_with_tools(
+            working_messages, tool_defs, temperature=temperature, timeout=timeout
         )
-        choice = resp.choices[0] if resp.choices else None
-        if not choice or not choice.message:
-            return None
-        msg = choice.message
+        working_messages.append(assistant_msg)
+        tool_calls = assistant_msg.get("tool_calls") or []
+        if not tool_calls:
+            content = (assistant_msg.get("content") or "").strip()
+            return reply_to_action(content) if content else None
 
-        # 模型直接返回文本（未使用工具）时兜底
-        if not msg.tool_calls:
-            if msg.content:
-                return reply_to_action(msg.content.strip())
-            return None
-
-        assistant_tool_calls = []
-        for tc in msg.tool_calls:
-            fn = getattr(tc, "function", None)
-            if not fn:
-                continue
-            assistant_tool_calls.append(
-                {
-                    "id": tc.id,
-                    "type": "function",
-                    "function": {"name": fn.name, "arguments": fn.arguments or "{}"},
-                }
-            )
-        working_messages.append(
-            {
-                "role": "assistant",
-                "content": msg.content or "",
-                "tool_calls": assistant_tool_calls,
-            }
-        )
-
-        for tc in msg.tool_calls:
-            fn = getattr(tc, "function", None)
-            if not fn:
-                continue
-            tool_name = fn.name
-            try:
-                args = json.loads(fn.arguments or "{}")
-            except json.JSONDecodeError:
-                args = {}
-
+        for tc in tool_calls:
+            fn = (tc or {}).get("function") or {}
+            tool_name = fn.get("name") or ""
+            args = parse_tool_args(fn.get("arguments"))
             if tool_name == "npc_action":
                 return _action_from_args(args)
-
-            if tool_name == "resolve_location_coordinates":
-                place_name = (args.get("place_name") or "").strip()
-                result = resolve_location_coordinates(place_name)
-                tool_result = result or {"error": "unknown place", "place_name": place_name}
-            elif tool_name == "get_npc_runtime_state":
-                npc_id = args.get("npc_id") or ""
-                tool_result = get_npc_runtime_state_local(npc_id)
-            elif mcp_client is not None and tool_name in mcp_tools_by_name:
-                try:
-                    tool_result = mcp_client.call_tool(tool_name, args)
-                except Exception as e:
-                    tool_result = {"error": "mcp call failed", "tool_name": tool_name, "detail": str(e)}
-            else:
-                tool_result = {"error": "unknown tool", "tool_name": tool_name}
-
+            tool_result = run_tool_call(
+                tool_name,
+                args,
+                mcp_client=mcp_client,
+                mcp_tools_by_name=mcp_tools_by_name,
+            )
             working_messages.append(
                 {
                     "role": "tool",
-                    "tool_call_id": tc.id,
+                    "tool_call_id": tc.get("id"),
                     "name": tool_name,
                     "content": json.dumps(tool_result, ensure_ascii=False),
                 }

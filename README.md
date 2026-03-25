@@ -8,7 +8,7 @@
 游戏客户端 (前端) ←—— HTTP POST /chat(JSON) ——→ AI 决策端(Flask，本服务)
                                              ↓
                                  LangGraph 图编排主流程
-                             retrieve(RAG) -> build_prompt -> run_llm -> store_memory
+                   retrieve(RAG) -> build_prompt -> prepare_tools -> agent <-> tools -> store_memory
                                              ↓
                                     LLM(Function Calling)输出标准动作 JSON
 ```
@@ -217,15 +217,23 @@ python run.py
 4. LangGraph 节点 `retrieve`：调用 `LongTermMemory.search()`（内部使用 sentence-transformers + ChromaDB）  
    - 输入：`player_id / npc_id / message / scene_info`  
    - 输出：`state.long_term_chunks: list[str]`
-5. LangGraph 节点 `build_prompt`：调用 `build_messages()` 组装给 LLM 的 `messages`  
-   - 输入：`message / npc_id / scene_info / long_term_chunks`  
+5. LangGraph 节点 `get_short_term_history`：调用 `ShortTermMemory.get_recent()`  
+   - 输入：`player_id / npc_id`  
+   - 输出：`state.short_term_history: list[{"role","content"}]`
+6. LangGraph 节点 `build_prompt`：调用 `build_messages()` 组装给 LLM 的 `messages`  
+   - 输入：`message / npc_id / scene_info / short_term_history / long_term_chunks`  
    - 输出：`state.messages`
-6. LangGraph 节点 `run_llm`：调用 `call_llm_with_tools()`（工具调用解析仍在 `app/reasoning/llm.py` 内实现）  
-   - 模型触发 `tool_calls` 时：执行本地工具 `resolve_location_coordinates` / `get_npc_runtime_state_local`，并在启用 MCP 时通过 `MCPToolClient.call_tool()` 访问 MCP 工具。  
-   - 输出：`state.action: ActionResponse`
-7. LangGraph 节点 `store_memory`：当 `use_consolidation=true` 时调用 `LongTermMemory.add_documents()` 把本轮交互写回 ChromaDB。  
+7. LangGraph 节点 `prepare_tools`：构建本轮可用 tools schema（包含 `npc_action`、本地 `resolve_location_coordinates`、以及通过 MCP 动态发现的工具）。  
+   - 重要：`get_npc_runtime_state` **只允许通过 MCP 调用**（不会回退到本地共享函数）。
+8. LangGraph 进入循环：`agent <-> tools`（由图的条件边决定是否继续调用工具）。  
+   - `agent`：单步调用 LLM（`llm_step_with_tools()`），拿到 `tool_calls` 或最终内容  
+   - `tools`：执行工具并把结果以 `role=tool` 追加回 `state.messages`  
+   - 当模型产生 `npc_action` tool_call 时：解析为 `state.action: ActionResponse` 并结束循环  
+   - 防死循环：由 LangGraph 的 `recursion_limit` 控制最大回合数（而不是在 `llm.py` 写死 4 次）
+9. LangGraph 节点 `store_memory`：当 `use_consolidation=true` 时调用 `LongTermMemory.add_documents()` 把本轮交互写回 ChromaDB。  
    - 输出：ChromaDB 落盘（`state.action` 不变）
-8. 返回 `ActionResponse` 的 JSON 给游戏客户端，游戏引擎据此执行对话/动作表现。
+10. LangGraph 节点 `update_short_term`：写入短期记忆（先 user 再 assistant），用于下一轮 prompt。
+11. 返回 `ActionResponse` 的 JSON 给游戏客户端，游戏引擎据此执行对话/动作表现。
 
 ## 全链路调用示例（从前端到输出）
 
@@ -241,8 +249,8 @@ python run.py
 ```
 3. 后端处理与调用函数链路（一次请求的关键路径）：
    1. `app/main.py` `/chat`：读取 JSON -> 调用 `agent_graph.invoke()`  
-   2. `app/langgraph_agent.py`：`retrieve(LongTermMemory.search)` -> `build_prompt(build_messages)` -> `run_llm(call_llm_with_tools)` -> `store_memory(LongTermMemory.add_documents)`  
-   3. `app/reasoning/llm.py`：当 LLM 产生 `tool_calls` 时，实际执行本地工具或 MCP 工具，然后把结果映射为 `ActionResponse`  
+   2. `app/langgraph_agent.py`：`retrieve(LongTermMemory.search)` -> `build_prompt(build_messages)` -> `prepare_tools(build_tooling)` -> `agent(llm_step_with_tools) <-> tools(run_tool_call)` -> `store_memory(LongTermMemory.add_documents)`  
+   3. `app/reasoning/llm.py`：提供单步 LLM 调用与工具执行函数；循环/决策由 LangGraph 条件边控制  
 4. 响应体（200，JSON，示例）：  
 ```json
 {
