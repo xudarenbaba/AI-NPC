@@ -17,30 +17,33 @@ NPC_ACTION_TOOL = {
     "type": "function",
     "function": {
         "name": "npc_action",
-        "description": "输出 NPC 对玩家的动作与台词，游戏引擎将据此执行表现",
+        "description": (
+            "最终输出工具（必须调用）。当你完成思考、并在需要时调用其他工具后，"
+            "必须调用 npc_action 作为最后一步返回结构化动作；不要只返回自然语言。"
+        ),
         "parameters": {
             "type": "object",
             "properties": {
                 "action_type": {
                     "type": "string",
                     "enum": ["dialogue", "move", "emote", "use_item", "idle"],
-                    "description": "动作类型",
+                    "description": "动作类型。默认 dialogue；仅在确有必要时使用 move/emote/use_item/idle。",
                 },
                 "dialogue": {
                     "type": "string",
-                    "description": "NPC 对玩家说的台词",
+                    "description": "NPC 对玩家说的台词。必填，简洁自然，符合当前 npc_id 的身份。",
                 },
                 "emotion": {
                     "type": "string",
-                    "description": "情绪/表情标签，可选",
+                    "description": "情绪/表情标签，可选。例如：友好、严肃、警惕。",
                 },
                 "target_id": {
                     "type": "string",
-                    "description": "动作目标 ID，可选",
+                    "description": "动作目标 ID，可选。例如目标 NPC 或任务对象 ID。",
                 },
                 "extra": {
                     "type": "object",
-                    "description": "扩展字段，可选",
+                    "description": "扩展字段，可选。可放坐标、任务阶段、工具结果摘要等结构化信息。",
                 },
             },
             "required": ["dialogue"],
@@ -52,11 +55,17 @@ RESOLVE_LOCATION_TOOL = {
     "type": "function",
     "function": {
         "name": "resolve_location_coordinates",
-        "description": "把地点自然语言名称解析为坐标。",
+        "description": (
+            "地点坐标查询工具（本地工具）。当用户询问某地点在哪里、要求具体坐标、"
+            "或你的回复涉及移动目的地时，优先调用该工具获取准确坐标后再回答。"
+        ),
         "parameters": {
             "type": "object",
             "properties": {
-                "place_name": {"type": "string", "description": "地点名词，如 商店、酒馆"},
+                "place_name": {
+                    "type": "string",
+                    "description": "地点名称（必须是单个地点）。示例：村口、商店、铁匠铺、酒馆、广场。",
+                },
             },
             "required": ["place_name"],
         },
@@ -78,12 +87,20 @@ def build_tooling() -> tuple[list[dict[str, Any]], MCPToolClient | None, dict[st
             for t in mcp_client.list_tools():
                 name = t["name"]
                 mcp_tools_by_name[name] = t
+                raw_desc = (t.get("description") or "").strip()
+                if name == "get_npc_runtime_state":
+                    desc = (
+                        raw_desc
+                        or "MCP 状态查询工具。用于获取指定 npc_id 的实时状态：location/job/task/available_actions。"
+                    )
+                else:
+                    desc = raw_desc or "MCP 工具。按参数调用并基于返回结果再决定最终 npc_action。"
                 tool_defs.append(
                     {
                         "type": "function",
                         "function": {
                             "name": name,
-                            "description": t.get("description", ""),
+                            "description": desc,
                             "parameters": t.get("input_schema") or {"type": "object"},
                         },
                     }

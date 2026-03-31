@@ -229,6 +229,7 @@ python run.py
    - 输出：`state.messages`
 7. LangGraph 节点 `prepare_tools`：构建本轮可用 tools schema（包含 `npc_action`、本地 `resolve_location_coordinates`、以及通过 MCP 动态发现的工具）。  
    - 重要：`get_npc_runtime_state` **只允许通过 MCP 调用**（不会回退到本地共享函数）。
+   - 工具描述已增强：明确了“何时调用本地坐标工具 / 何时调用 MCP 状态工具 / 何时必须输出 npc_action”，降低模型漏调工具概率。
 8. LangGraph 进入循环：`agent <-> tools`（由图的条件边决定是否继续调用工具）。  
    - `agent`：单步调用 LLM（`llm_step_with_tools()`），拿到 `tool_calls` 或最终内容  
    - `tools`：执行工具并把结果以 `role=tool` 追加回 `state.messages`  
