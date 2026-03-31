@@ -218,12 +218,14 @@ python run.py
 3. 路由函数调用 `agent_graph.invoke(...)`（`app/langgraph_agent.py` 中的 LangGraph 图编排）并把输入放进图的 `state`；同时传入 `recursion_limit` 用于防止无限循环。
 4. LangGraph 节点 `retrieve`：调用 `LongTermMemory.search()`（内部使用 sentence-transformers + ChromaDB）  
    - 输入：`player_id / npc_id / message / scene_info`  
-   - 输出：`state.long_term_chunks: list[str]`
+   - 输出：
+     - `state.long_term_npc_chunks: list[str]`（NPC 专属：仅检索 kbase/交互记忆）
+     - `state.long_term_world_chunks: list[str]`（全局世界观：在 kbase+lore 中取 lore 增量）
 5. LangGraph 节点 `get_short_term_history`：调用 `ShortTermMemory.get_recent()`  
    - 输入：`player_id / npc_id`  
    - 输出：`state.short_term_history: list[{"role","content"}]`
 6. LangGraph 节点 `build_prompt`：调用 `build_messages()` 组装给 LLM 的 `messages`  
-   - 输入：`message / npc_id / scene_info / short_term_history / long_term_chunks`  
+   - 输入：`message / npc_id / scene_info / short_term_history / long_term_npc_chunks / long_term_world_chunks`  
    - 输出：`state.messages`
 7. LangGraph 节点 `prepare_tools`：构建本轮可用 tools schema（包含 `npc_action`、本地 `resolve_location_coordinates`、以及通过 MCP 动态发现的工具）。  
    - 重要：`get_npc_runtime_state` **只允许通过 MCP 调用**（不会回退到本地共享函数）。
@@ -292,11 +294,13 @@ python run.py
    - 调用：`agent_graph.invoke(state=..., recursion_limit=20)`
 2. LangGraph 依次跑节点：
    - `retrieve`：`LongTermMemory.search()`  
-     - 输出：`state.long_term_chunks: list[str]`
+     - 输出：
+       - `state.long_term_npc_chunks: list[str]`（NPC 专属：仅检索 kbase/交互记忆）
+       - `state.long_term_world_chunks: list[str]`（全局世界观：在 kbase+lore 中取 lore 增量）
    - `get_short_term_history`：`ShortTermMemory.get_recent()`  
      - 输出：`state.short_term_history: list[{"role","content"}]`
    - `build_prompt`：`build_messages(...)`  
-     - 输入：`state.short_term_history / state.long_term_chunks / state.message...`
+     - 输入：`state.short_term_history / state.long_term_npc_chunks / state.long_term_world_chunks / state.message...`
      - 输出：`state.messages`
    - `prepare_tools`：`build_tooling()`  
      - 输出：`state.tool_defs`（包含本地工具 schema + MCP 动态工具 schema）

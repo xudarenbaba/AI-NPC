@@ -7,6 +7,9 @@ def build_messages(
     npc_id: str | None = None,
     scene_info: dict[str, Any] | None = None,
     short_term_history: list[dict[str, Any]] | None = None,
+    long_term_npc_chunks: list[str] | None = None,
+    long_term_world_chunks: list[str] | None = None,
+    # 兼容旧调用：如果传入 long_term_chunks，则按原逻辑拼入一段即可
     long_term_chunks: list[str] | None = None,
     system_extra: str | None = None,
 ) -> list[dict[str, Any]]:
@@ -23,7 +26,16 @@ def build_messages(
         system_parts.append(f"当前你要扮演的 NPC_id 是：{npc_id}。你必须遵守该 NPC 的行为限制与职责，不能假装成其他 NPC。")
     if system_extra:
         system_parts.append(system_extra)
-    if long_term_chunks:
+    if long_term_npc_chunks:
+        system_parts.append("\n【NPC 专属知识（优先参考）】\n")
+        system_parts.append("\n".join(long_term_npc_chunks))
+
+    if long_term_world_chunks:
+        system_parts.append("\n【全局世界观（补充参考）】\n")
+        system_parts.append("\n".join(long_term_world_chunks))
+
+    # 兼容旧逻辑：只提供 long_term_chunks 时，仍然按单段背景拼入
+    if long_term_chunks and not (long_term_npc_chunks or long_term_world_chunks):
         system_parts.append("\n【以下是与当前对话相关的背景或记忆，请酌情参考】\n")
         system_parts.append("\n".join(long_term_chunks))
     system_content = "\n".join(system_parts)

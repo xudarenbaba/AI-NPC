@@ -31,7 +31,8 @@ class AgentState(TypedDict, total=False):
     scene_info: dict[str, Any]
 
     short_term_history: list[dict[str, Any]]
-    long_term_chunks: list[str]
+    long_term_npc_chunks: list[str]
+    long_term_world_chunks: list[str]
     messages: list[dict[str, Any]]
     action: ActionResponse
 
@@ -50,7 +51,8 @@ def build_agent_graph():
     def retrieve(state: AgentState) -> AgentState:
         cfg = load_config()
         if not cfg.get("use_rag", True):
-            state["long_term_chunks"] = []
+            state["long_term_npc_chunks"] = []
+            state["long_term_world_chunks"] = []
             logger.info("RAG disabled by config.")
             return state
 
@@ -69,18 +71,33 @@ def build_agent_graph():
         if scene_info:
             query = f"scene:{scene_info}\n" + query
 
-        chunks = long_term.search(
+        # 分层检索：
+        # 1) NPC 专属知识：仅检索 kbase（交互记忆，且可按 npc_id 过滤）
+        npc_chunks = long_term.search(
+            query,
+            filter_by_player=player_id,
+            filter_by_npc=npc_id,
+            include_lore=False,
+        )
+
+        # 2) 全局世界观：在“kbase + lore”结果中剔除已命中的 npc_chunks，剩余部分作为 world/lore 增量
+        all_chunks = long_term.search(
             query,
             filter_by_player=player_id,
             filter_by_npc=npc_id,
             include_lore=True,
         )
-        state["long_term_chunks"] = chunks or []
+        npc_set = set(npc_chunks or [])
+        world_chunks = [c for c in (all_chunks or []) if c not in npc_set]
+
+        state["long_term_npc_chunks"] = npc_chunks or []
+        state["long_term_world_chunks"] = world_chunks
         logger.info(
-            "RAG retrieve done. player_id=%s npc_id=%s chunks=%s",
+            "RAG retrieve done. player_id=%s npc_id=%s npc_chunks=%s world_chunks=%s",
             player_id,
             npc_id,
-            len(state["long_term_chunks"]),
+            len(state["long_term_npc_chunks"]),
+            len(state["long_term_world_chunks"]),
         )
         return state
 
@@ -102,7 +119,8 @@ def build_agent_graph():
             npc_id=state.get("npc_id"),
             scene_info=state.get("scene_info") or {},
             short_term_history=state.get("short_term_history") or None,
-            long_term_chunks=state.get("long_term_chunks") or None,
+            long_term_npc_chunks=state.get("long_term_npc_chunks") or None,
+            long_term_world_chunks=state.get("long_term_world_chunks") or None,
         )
         logger.info("Prompt built. messages=%s", len(state["messages"]))
         return state
