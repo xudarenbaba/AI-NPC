@@ -25,7 +25,7 @@ NPC_STATE = {
 
 
 def get_npc_runtime_state_local(npc_id: str) -> dict[str, Any]:
-    """获取 NPC 当前状态。"""
+    """获取 NPC 当前状态。可以返回npc的坐标，能做的任务等"""
     item = NPC_STATE.get(npc_id) or NPC_STATE["default"]
     return {
         "npc_id": npc_id,

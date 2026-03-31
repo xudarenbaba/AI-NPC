@@ -261,3 +261,68 @@ python run.py
   "extra": null
 }
 ```
+
+## 全链路调用示例（同时调用本地 tool + MCP tool）
+
+下面示例展示：模型在同一个步骤里同时触发 **本地工具** `resolve_location_coordinates` 和 **MCP 工具** `get_npc_runtime_state`，并最终输出 `npc_action`。
+
+### 前提
+- `config.yaml` 中 `mcp.enabled: true`
+- MCP 服务已启动（例如在另一个终端运行）：
+  - `python npc_mcp/local_server.py`
+
+### 1. 前端请求
+`POST http://localhost:5000/chat`
+
+请求体（JSON）示例（该输入会在同一轮触发本地 tool + MCP tool）：
+```json
+{
+  "player_id": "player_001",
+  "message": "你好！告诉我你当前的运行状态，你的坐标，你能做哪些任务，顺便告诉我酒馆的具体坐标在哪？",
+  "scene_info": { "location": "村口", "time": "早晨" },
+  "npc_id": "npc_merchant_001"
+}
+```
+
+### 2. 后端/图内调用链路（关键路径 + 输入输出）
+1. `app/main.py` `/chat`：
+   - 输入：上面的 JSON
+   - 调用：`agent_graph.invoke(state=..., recursion_limit=20)`
+2. LangGraph 依次跑节点：
+   - `retrieve`：`LongTermMemory.search()`  
+     - 输出：`state.long_term_chunks: list[str]`
+   - `get_short_term_history`：`ShortTermMemory.get_recent()`  
+     - 输出：`state.short_term_history: list[{"role","content"}]`
+   - `build_prompt`：`build_messages(...)`  
+     - 输入：`state.short_term_history / state.long_term_chunks / state.message...`
+     - 输出：`state.messages`
+   - `prepare_tools`：`build_tooling()`  
+     - 输出：`state.tool_defs`（包含本地工具 schema + MCP 动态工具 schema）
+   - `agent`：单步 LLM（`llm_step_with_tools(messages, tool_defs)`）
+     - 输出：模型返回一个 assistant message，里面的 `tool_calls` 同时包含：
+       - `resolve_location_coordinates({"place_name":"酒馆"})`（本地工具）
+       - `get_npc_runtime_state({"npc_id":"npc_merchant_001"})`（MCP 工具）
+       - `npc_action({...})`（格式指定工具）
+3. 图进入 `tools` 节点（执行工具并把结果追加回 `state.messages`）：
+   - 本地工具：`resolve_location_coordinates`  
+     - 输出（示例）：`{"place_name":"酒馆","x":27,"y":30,"z":0}`
+   - MCP 工具：`get_npc_runtime_state`  
+     - 实际调用：`MCPToolClient.call_tool()` -> stdio 访问 `npc_mcp/local_server.py`
+     - 输出（示例）：`{"npc_id":"npc_merchant_001","location":{...},"job":"商人","task":"售卖补给","available_actions":[...] }`
+   - `npc_action`：在 `tools` 节点里解析其 `arguments`，直接写入：
+     - `state.action: ActionResponse`
+4. 条件路由决定下一步：
+   - 由于已存在 `state.action`，路由进入 `store_memory` 并结束循环
+5. `store_memory`（可选）：
+   - 行为：`LongTermMemory.add_documents()` 写回 ChromaDB（当 `use_consolidation=true`）
+6. `update_short_term`：
+   - 写入短期记忆：先 user 再 assistant
+
+### 3. 响应体（200，JSON，示例）
+```json
+{
+  "action_type": "dialogue",
+  "dialogue": "你好！我是村里的巡逻村民。我现在的坐标是(10,5,0)，正在村口巡逻。我能做的任务主要是巡逻和对话。酒馆的具体坐标是(27,30,340)，在村子的东边。",
+  "emotion": "友好"
+}
+```
