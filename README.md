@@ -232,7 +232,7 @@ python run.py
    - 工具描述已增强：明确了“何时调用本地坐标工具 / 何时调用 MCP 状态工具 / 何时必须输出 npc_action”，降低模型漏调工具概率。
 8. LangGraph 进入循环：`agent <-> tools`（由图的条件边决定是否继续调用工具）。  
    - `agent`：单步调用 LLM（`llm_step_with_tools()`），拿到 `tool_calls` 或最终内容  
-   - `tools`：执行工具并把结果以 `role=tool` 追加回 `state.messages`  
+   - `tools`：执行工具并把结果以 `role=tool` 追加回 `state.messages`；同时对工具返回值附带“结果解释模板”（`RAW_RESULT_JSON` + `RESULT_EXPLANATION_TEMPLATE`），降低模型误读工具返回值的概率  
    - 当模型产生 `npc_action` tool_call 时：解析为 `state.action: ActionResponse` 并结束循环  
    - 防死循环：由 LangGraph 的 `recursion_limit` 控制最大回合数（而不是在 `llm.py` 写死 4 次）
 9. LangGraph 节点 `store_memory`：当 `use_consolidation=true` 时调用 `LongTermMemory.add_documents()` 把本轮交互写回 ChromaDB。  

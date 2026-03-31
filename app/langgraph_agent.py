@@ -172,6 +172,30 @@ def build_agent_graph():
             tool_name = fn.get("name") or ""
             args = parse_tool_args(fn.get("arguments"))
 
+            def _tool_result_with_template(t_name: str, result: dict[str, Any]) -> str:
+                """把工具返回值用解释模板包起来，降低模型误读概率。"""
+                raw_json = json.dumps(result, ensure_ascii=False)
+                if t_name == "resolve_location_coordinates":
+                    guide = (
+                        "解释规则：请直接使用 result.x/result.y/result.z 作为坐标；"
+                        "result.place_name 只用于确认地点名是否匹配。"
+                    )
+                elif t_name == "get_npc_runtime_state":
+                    guide = (
+                        "解释规则：请直接使用 result.location.x/result.location.y/result.location.z 作为坐标；"
+                        "result.job 表示职业，result.task 表示当前任务，available_actions 表示可行动作集合。"
+                    )
+                else:
+                    guide = (
+                        "解释规则：result 为该工具返回的结构化数据。优先使用字段含义明确的值，"
+                        "必要时把信息提取为可用于对话/行动的摘要。"
+                    )
+                return (
+                    f"TOOL_NAME={t_name}\n"
+                    f"RAW_RESULT_JSON={raw_json}\n"
+                    f"RESULT_EXPLANATION_TEMPLATE={guide}"
+                )
+
             # npc_action 是“格式指定工具”：解析为最终 ActionResponse，并终止循环
             if tool_name == "npc_action":
                 dialogue = args.get("dialogue", "")
@@ -200,7 +224,7 @@ def build_agent_graph():
                     "role": "tool",
                     "tool_call_id": tc.get("id"),
                     "name": tool_name,
-                    "content": json.dumps(tool_result, ensure_ascii=False),
+                    "content": _tool_result_with_template(tool_name, tool_result),
                 }
             )
             logger.info("Tool result appended. tool_name=%s", tool_name)
