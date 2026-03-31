@@ -32,6 +32,7 @@ pip install -r requirements.txt
 
 ### 2. 配置
 
+- 可先复制示例配置：`config.example.yaml` -> `config.yaml`。
 - 确保项目根目录存在 `config.yaml`（其字段结构来源于 `app/config.py` 的默认配置）。
 - 在 `config.yaml` 中填写 `llm.api_key`，或设置环境变量 `AI_NPC_LLM_API_KEY`（环境变量优先生效）。
 - **不要将包含真实 api_key 的 config.yaml 提交到仓库。**
@@ -134,6 +135,7 @@ python scripts/import_lore.py
 
 ### 根目录
 - `config.yaml`：运行配置（LLM、嵌入模型、ChromaDB 持久化目录、RAG/沉淀相关参数等）。建议不要提交真实 `api_key`。
+- `config.example.yaml`：可提交的配置模板（不含真实密钥），用于新环境快速复制生成 `config.yaml`。
 - `requirements.txt`：Python 依赖列表。
 - `run.py`：Flask 启动入口，启动 `app.main.create_app()`，监听 `0.0.0.0:5000`。
 - `README.md`：项目说明。

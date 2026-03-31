@@ -1,0 +1,29 @@
+use_rag: true
+use_consolidation: true
+
+llm:
+  provider: openai_compatible
+  model: deepseek-chat
+  api_key: "YOUR_API_KEY_HERE"
+  base_url: https://api.deepseek.com
+  temperature: 0.2
+  timeout_s: 60
+
+embeddings:
+  provider: huggingface
+  model: BAAI/bge-small-zh-v1.5
+  cache_dir: models
+
+vectorstore:
+  persist_dir: data/chroma
+  collection_name: kbase
+  lore_collection_name: lore
+
+memory:
+  short_term_turns: 10
+  rag_top_k: 5
+
+mcp:
+  enabled: true
+  command: null
+  args: null
