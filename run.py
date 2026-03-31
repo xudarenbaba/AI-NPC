@@ -2,6 +2,7 @@
 import logging
 import os
 import sys
+from datetime import datetime
 from logging.handlers import RotatingFileHandler
 
 # 项目根目录加入 path
@@ -13,7 +14,8 @@ def setup_logging() -> None:
     """初始化日志：控制台 + logs/app.log 文件滚动保存。"""
     log_dir = os.path.join(PROJECT_ROOT, "logs")
     os.makedirs(log_dir, exist_ok=True)
-    log_file = os.path.join(log_dir, "app.log")
+    timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+    log_file = os.path.join(log_dir, f"app-{timestamp}.log")
 
     root = logging.getLogger()
     root.setLevel(logging.INFO)

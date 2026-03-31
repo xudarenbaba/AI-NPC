@@ -48,10 +48,11 @@ def create_app(config_path: str | None = None) -> Flask:
             if not req.player_id or not req.message:
                 return jsonify({"error": "player_id and message are required"}), 400
             logger.info(
-                "Chat request accepted. player_id=%s npc_id=%s message_len=%s",
+                "Chat request accepted. player_id=%s npc_id=%s message_len=%s message=%s",
                 req.player_id,
                 req.npc_id,
                 len(req.message),
+                (req.message[:500] + "...") if len(req.message) > 500 else req.message,
             )
         except Exception as e:
             logger.exception("Chat request validation failed")
