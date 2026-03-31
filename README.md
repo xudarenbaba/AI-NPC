@@ -329,7 +329,26 @@ python run.py
 ```json
 {
   "action_type": "dialogue",
-  "dialogue": "你好！我是村里的巡逻村民。我现在的坐标是(10,5,0)，正在村口巡逻。我能做的任务主要是巡逻和对话。酒馆的具体坐标是(27,30,340)，在村子的东边。",
-  "emotion": "友好"
+  "dialogue": "我是村里的药师，正在炼制止血散和祛瘴丹。我的位置在坐标(33, 24, 0)。我能和你对话，使用药草，或者休息。酒馆在坐标(27, 30, 340)，那里是情报汇集点，你可以找掌柜打听消息。",
+  "emotion": "友好",
+  "extra": {
+    "my_available_actions": [
+      "dialogue",
+      "use_item",
+      "idle"
+    ],
+    "my_job": "药师",
+    "my_location": {
+      "x": 33,
+      "y": 24,
+      "z": 0
+    },
+    "my_task": "炼制止血散与祛瘴丹",
+    "tavern_coordinates": {
+      "x": 27,
+      "y": 30,
+      "z": 340
+    }
+  }
 }
 ```
