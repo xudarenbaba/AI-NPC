@@ -92,6 +92,11 @@ def build_tooling() -> tuple[list[dict[str, Any]], MCPToolClient | None, dict[st
             logger.warning("MCP list_tools failed, MCP tools disabled for this run: %s", e)
             mcp_client = None
             mcp_tools_by_name = {}
+    logger.info(
+        "Tooling built. local_tools=%s mcp_tools=%s",
+        2,  # npc_action + resolve_location_coordinates
+        len(mcp_tools_by_name),
+    )
     return tool_defs, mcp_client, mcp_tools_by_name
 
 
@@ -118,6 +123,7 @@ def llm_step_with_tools(
     )
     choice = resp.choices[0] if resp.choices else None
     if not choice or not choice.message:
+        logger.info("LLM step returned empty choice.")
         return {"role": "assistant", "content": ""}
 
     msg = choice.message
@@ -138,6 +144,11 @@ def llm_step_with_tools(
     out: dict[str, Any] = {"role": "assistant", "content": (msg.content or "")}
     if assistant_tool_calls:
         out["tool_calls"] = assistant_tool_calls
+    logger.info(
+        "LLM step response parsed. content_len=%s tool_calls=%s",
+        len(out.get("content") or ""),
+        len(assistant_tool_calls),
+    )
     return out
 
 
@@ -163,10 +174,12 @@ def run_tool_call(
     if tool_name == "resolve_location_coordinates":
         place_name = (args.get("place_name") or "").strip()
         result = resolve_location_coordinates(place_name)
+        logger.info("Run local tool: resolve_location_coordinates place=%s", place_name)
         return result or {"error": "unknown place", "place_name": place_name}
 
     if mcp_client is not None and tool_name in mcp_tools_by_name:
         try:
+            logger.info("Run MCP tool: %s", tool_name)
             return mcp_client.call_tool(tool_name, args)
         except Exception as e:
             return {"error": "mcp call failed", "tool_name": tool_name, "detail": str(e)}
