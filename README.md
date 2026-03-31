@@ -53,7 +53,7 @@ curl http://localhost:5000/health
 
 ## 接口说明
 
-> 该项目目前没有单独的可视化前端界面；对外提供的是 HTTP API。
+> 该项目对外提供的是 HTTP API。本地有一个测试的web页面。
 
 ### POST /chat
 
