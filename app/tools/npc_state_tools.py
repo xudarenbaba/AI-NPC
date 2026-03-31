@@ -21,6 +21,24 @@ NPC_STATE = {
         "task": "售卖补给",
         "available_actions": ["dialogue", "move", "use_item", "idle"],
     },
+    "npc_tavern_keeper_001": {
+        "location": {"x": 27, "y": 30, "z": 0},
+        "job": "酒馆掌柜",
+        "task": "提供情报与接待来客",
+        "available_actions": ["dialogue", "emote", "idle"],
+    },
+    "npc_alchemist_001": {
+        "location": {"x": 33, "y": 24, "z": 0},
+        "job": "药师",
+        "task": "炼制止血散与祛瘴丹",
+        "available_actions": ["dialogue", "use_item", "idle"],
+    },
+    "npc_scout_001": {
+        "location": {"x": 12, "y": 38, "z": 0},
+        "job": "巡山斥候",
+        "task": "侦查北山谷口异动",
+        "available_actions": ["dialogue", "move", "emote", "idle"],
+    },
 }
 
 
