@@ -53,8 +53,11 @@ class AiClient:
             },
         }
         start = time.perf_counter()
+        tout = SETTINGS.ai_timeout_seconds
+        # (连接超时, 读取超时)：本机后端连接应很快，推理可能很慢
+        timeout_arg: float | tuple[float, float] = (min(15.0, tout), tout)
         try:
-            response = requests.post(self.chat_url, json=payload, timeout=SETTINGS.ai_timeout_seconds)
+            response = requests.post(self.chat_url, json=payload, timeout=timeout_arg)
             latency_ms = int((time.perf_counter() - start) * 1000)
             response.raise_for_status()
             data = response.json()

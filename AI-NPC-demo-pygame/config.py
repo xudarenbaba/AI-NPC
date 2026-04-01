@@ -11,7 +11,8 @@ class Settings:
     interact_distance: float = 80.0
     ai_base_url: str = "http://localhost:5000"
     ai_chat_path: str = "/chat"
-    ai_timeout_seconds: float = 1.2
+    # LangGraph + 多轮 LLM + MCP 常需数十秒；过短会客户端先超时，误显示「走神」台词
+    ai_timeout_seconds: float = 120.0
     ai_cooldown_seconds: float = 2.0
     bubble_duration_seconds: float = 4.0
     scene_location: str = "村口广场"

@@ -4,7 +4,9 @@ import pygame
 
 from config import SETTINGS
 from game.ai_client import AiClient
+from game.clipboard_text import get_clipboard_text
 from game.models import NPC
+from game.window_focus import try_focus_game_window
 from game.ui import UI
 from game.world import World
 
@@ -75,6 +77,11 @@ def run_game() -> None:
         snap_transcript_bottom[0] = True
         if SETTINGS.use_sdl_text_input:
             ime_pending = True
+        try_focus_game_window()
+        try:
+            pygame.mouse.set_visible(True)
+        except Exception:
+            pass
 
     def exit_chat() -> None:
         nonlocal chat_mode, chat_target, input_buffer, request_pending, ime_pending
@@ -95,16 +102,9 @@ def run_game() -> None:
         nonlocal input_buffer
         if request_pending:
             return
-        try:
-            raw = pygame.scrap.get(pygame.SCRAP_TEXT)
-        except Exception:
+        text = get_clipboard_text()
+        if not text:
             return
-        if not raw:
-            return
-        if isinstance(raw, bytes):
-            text = raw.decode("utf-8", errors="ignore")
-        else:
-            text = str(raw)
         text = text.replace("\r\n", "\n").replace("\r", "\n")
         input_buffer = _append_input(input_buffer, text)
 
