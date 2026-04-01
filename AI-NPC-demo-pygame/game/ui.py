@@ -262,13 +262,13 @@ class UI:
         screen.blit(title, (box.x + 20, box.y + 14))
         if npc_id:
             sub = self.small_font.render(
-                f"{npc_id} · Enter 发送 · 空行+Enter 关闭 · Esc · Ctrl+V 粘贴",
+                f"{npc_id} · Enter 发送 · 空行+Enter 关闭 · Esc",
                 True,
                 HINT_COLOR,
             )
         else:
             sub = self.small_font.render(
-                "Enter 发送 · 空行+Enter 关闭 · Esc · Ctrl+V 粘贴",
+                "Enter 发送 · 空行+Enter 关闭 · Esc",
                 True,
                 HINT_COLOR,
             )
@@ -276,7 +276,7 @@ class UI:
 
         focus_lines = _wrap_text_to_width(
             self.small_font,
-            "提示：键盘只会发给「当前焦点窗口」。请先用鼠标点击本游戏画面再输入；若 Ctrl+V 粘进终端，说明焦点还在终端。",
+            "提示：当前演示仅支持英文输入。键盘只会发给「当前焦点窗口」，请先用鼠标点击游戏画面再输入。",
             max(200, box.w - 48),
         )
         fy = box.y + 66

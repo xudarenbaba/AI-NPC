@@ -4,7 +4,6 @@ import pygame
 
 from config import SETTINGS
 from game.ai_client import AiClient
-from game.clipboard_text import get_clipboard_text
 from game.models import NPC
 from game.window_focus import try_focus_game_window
 from game.ui import UI
@@ -42,10 +41,6 @@ def run_game() -> None:
         os.environ.setdefault("SDL_IME_SHOW_UI", "1")
 
     pygame.init()
-    try:
-        pygame.scrap.init()
-    except Exception:
-        pass
 
     screen = pygame.display.set_mode((SETTINGS.window_width, SETTINGS.window_height))
     pygame.display.set_caption("AI NPC · Pygame 演示（对接 /chat）")
@@ -97,16 +92,6 @@ def run_game() -> None:
                 pygame.key.stop_text_input()
             except Exception:
                 pass
-
-    def try_paste_to_buffer() -> None:
-        nonlocal input_buffer
-        if request_pending:
-            return
-        text = get_clipboard_text()
-        if not text:
-            return
-        text = text.replace("\r\n", "\n").replace("\r", "\n")
-        input_buffer = _append_input(input_buffer, text)
 
     def draw_frame(now: float) -> None:
         ui.draw(
@@ -204,8 +189,6 @@ def run_game() -> None:
 
                     elif event.key == pygame.K_BACKSPACE and not request_pending:
                         input_buffer = input_buffer[:-1]
-                    elif event.key == pygame.K_v and (event.mod & pygame.KMOD_CTRL):
-                        try_paste_to_buffer()
                     elif (
                         not SETTINGS.use_sdl_text_input
                         and not request_pending

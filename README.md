@@ -2,6 +2,40 @@
 
 为游戏中的 NPC 提供具备**长期记忆、世界观感知与结构化动作决策**的 AI 后端。使用 **LangGraph 编排**串联：RAG(ChromaDB) -> Prompt -> LLM Function Calling -> 写回 ChromaDB，与游戏引擎通过 HTTP JSON 对接。
 
+## 项目是做什么的
+
+- 这是一个面向游戏的 **NPC 决策服务**（后端 API），不是完整游戏客户端。
+- 游戏侧通过 `POST /chat` 发送玩家输入和场景信息，本服务返回结构化动作（`dialogue/move/emote/use_item/idle`）。
+- 服务内部会做 RAG 检索（世界观 + 交互记忆）、工具调用（本地工具 + MCP 工具）和记忆写回。
+
+## 快速启动
+
+```bash
+python -m venv .venv
+.venv\Scripts\activate   # Windows
+pip install -r requirements.txt
+python run.py
+```
+
+启动后访问 `http://localhost:5000/health` 验证服务状态。
+
+## 模拟游戏 Demo（Pygame）
+
+- 仓库内包含一个可直接联调本后端的模拟游戏子项目：`AI-NPC-demo-pygame`。
+- 该子项目用于快速验证“玩家输入 -> `/chat` -> NPC 对话/动作反馈”的最小闭环。
+- 详细说明（运行步骤、交互方式、已知限制）请查看：`AI-NPC-demo-pygame/README.md`。
+
+最简联调流程：
+
+1. 在本项目根目录启动后端：`python run.py`
+2. 进入子项目目录并启动 Demo：
+
+```bash
+cd AI-NPC-demo-pygame
+pip install -r requirements.txt
+python run.py
+```
+
 ## 架构概览（LangGraph 主链路）
 
 ```
@@ -18,38 +52,16 @@
 - **推理**：把召回片段拼入 system/user prompt，要求模型通过 `npc_action` 工具输出结构化动作。
 - **写回沉淀**：根据 `use_consolidation` 配置，把本轮交互写回 ChromaDB（供后续 RAG 检索）。
 
-## 本地运行
+## 详细运行与配置
 
-### 1. 安装依赖
-
-```bash
-cd AI+NPC
-python -m venv .venv
-.venv\Scripts\activate   # Windows
-# source .venv/bin/activate  # Linux/macOS
-pip install -r requirements.txt
-```
-
-### 2. 配置
+`快速启动` 一节已经包含最小运行命令；这里补充需要注意的配置项：
 
 - 可先复制示例配置：`config.example.yaml` -> `config.yaml`。
-- 确保项目根目录存在 `config.yaml`（其字段结构来源于 `app/config.py` 的默认配置）。
+- 确保项目根目录存在 `config.yaml`（字段结构来源于 `app/config.py` 的默认配置）。
 - 在 `config.yaml` 中填写 `llm.api_key`，或设置环境变量 `AI_NPC_LLM_API_KEY`（环境变量优先生效）。
-- **不要将包含真实 api_key 的 config.yaml 提交到仓库。**
+- **不要将包含真实 api_key 的 `config.yaml` 提交到仓库。**
 
-### 3. 启动服务
-
-```bash
-python run.py
-```
-
-默认监听 `http://0.0.0.0:5000`。
-
-### 4. 健康检查
-
-```bash
-curl http://localhost:5000/health
-```
+服务默认监听 `http://0.0.0.0:5000`，可通过 `http://localhost:5000/health` 做健康检查。
 
 ## 接口说明
 
