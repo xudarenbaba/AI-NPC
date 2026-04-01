@@ -1,3 +1,5 @@
+import os
+
 import pygame
 
 from config import SETTINGS
@@ -7,8 +9,34 @@ from game.ui import UI
 from game.world import World
 
 
+def _is_physical_e_key(event: pygame.event.Event) -> bool:
+    if event.type != pygame.KEYDOWN:
+        return False
+    if event.key == pygame.K_e:
+        return True
+    sc = getattr(event, "scancode", -1)
+    code_e = getattr(pygame, "SCANCODE_E", 8)
+    return sc == code_e
+
+
+def _append_input(buffer: str, text: str) -> str:
+    room = SETTINGS.input_max_chars - len(buffer)
+    if room <= 0:
+        return buffer
+    return buffer + text[:room]
+
+
 def run_game() -> None:
+    # 若仍启用 SDL 文本输入，尽量显示系统 IME 候选窗（需较新 SDL）
+    if SETTINGS.use_sdl_text_input:
+        os.environ.setdefault("SDL_IME_SHOW_UI", "1")
+
     pygame.init()
+    try:
+        pygame.scrap.init()
+    except Exception:
+        pass
+
     screen = pygame.display.set_mode((SETTINGS.window_width, SETTINGS.window_height))
     pygame.display.set_caption("AI NPC · Pygame 演示（对接 /chat）")
     clock = pygame.time.Clock()
@@ -24,32 +52,56 @@ def run_game() -> None:
     chat_target: NPC | None = None
     input_buffer = ""
     request_pending = False
+    ime_pending = False
 
     def enter_chat(npc: NPC) -> None:
-        nonlocal chat_mode, chat_target, input_buffer
+        nonlocal chat_mode, chat_target, input_buffer, ime_pending
         chat_mode = True
         chat_target = npc
         input_buffer = ""
-        try:
-            pygame.key.start_text_input()
-            pygame.key.set_text_input_rect(ui.input_screen_rect())
-        except Exception:
-            pass
+        if SETTINGS.use_sdl_text_input:
+            ime_pending = True
 
     def exit_chat() -> None:
-        nonlocal chat_mode, chat_target, input_buffer, request_pending
+        nonlocal chat_mode, chat_target, input_buffer, request_pending, ime_pending
         chat_mode = False
         chat_target = None
         input_buffer = ""
         request_pending = False
+        ime_pending = False
+        if SETTINGS.use_sdl_text_input:
+            try:
+                pygame.key.stop_text_input()
+            except Exception:
+                pass
+
+    def try_paste_to_buffer() -> None:
+        nonlocal input_buffer
         try:
-            pygame.key.stop_text_input()
+            raw = pygame.scrap.get(pygame.SCRAP_TEXT)
         except Exception:
-            pass
+            return
+        if not raw:
+            return
+        if isinstance(raw, bytes):
+            text = raw.decode("utf-8", errors="ignore")
+        else:
+            text = str(raw)
+        text = text.replace("\r\n", "\n").replace("\r", "\n")
+        input_buffer = _append_input(input_buffer, text)
 
     while running:
         dt = clock.tick(SETTINGS.fps) / 1000.0
         now = pygame.time.get_ticks() / 1000.0
+
+        if ime_pending and chat_mode and SETTINGS.use_sdl_text_input:
+            try:
+                r = ui.layout_chat_panel(screen)
+                pygame.key.start_text_input()
+                pygame.key.set_text_input_rect(r)
+            except Exception:
+                pass
+            ime_pending = False
 
         for event in pygame.event.get():
             if event.type == pygame.QUIT:
@@ -96,7 +148,18 @@ def run_game() -> None:
                         input_buffer = ""
                     elif event.key == pygame.K_BACKSPACE:
                         input_buffer = input_buffer[:-1]
-                elif event.key == pygame.K_e and not chat_mode:
+                    elif event.key == pygame.K_v and (event.mod & pygame.KMOD_CTRL):
+                        try_paste_to_buffer()
+                    elif (
+                        not SETTINGS.use_sdl_text_input
+                        and event.unicode
+                        and not (event.mod & pygame.KMOD_CTRL)
+                    ):
+                        # 默认关闭 SDL 文本输入：用 KEYDOWN.unicode（避免与 TEXTINPUT 双写）
+                        ch = event.unicode
+                        if ch.isprintable() and ch not in "\r\n\t":
+                            input_buffer = _append_input(input_buffer, ch)
+                elif _is_physical_e_key(event) and not chat_mode:
                     nearest_npc, nearest_dist = world.nearest_npc()
                     can_open = (
                         nearest_npc is not None
@@ -106,10 +169,14 @@ def run_game() -> None:
                     if can_open and nearest_npc is not None:
                         enter_chat(nearest_npc)
             elif event.type == pygame.TEXTINPUT and chat_mode and not request_pending:
-                if event.text:
-                    room = SETTINGS.input_max_chars - len(input_buffer)
-                    if room > 0:
-                        input_buffer += event.text[:room]
+                if SETTINGS.use_sdl_text_input and event.text:
+                    input_buffer = _append_input(input_buffer, event.text)
+
+        if chat_mode and SETTINGS.use_sdl_text_input:
+            try:
+                pygame.key.set_text_input_rect(ui.layout_chat_panel(screen))
+            except Exception:
+                pass
 
         keys = pygame.key.get_pressed()
         move = pygame.Vector2(0, 0)
@@ -138,8 +205,9 @@ def run_game() -> None:
         )
         pygame.display.flip()
 
-    try:
-        pygame.key.stop_text_input()
-    except Exception:
-        pass
+    if SETTINGS.use_sdl_text_input:
+        try:
+            pygame.key.stop_text_input()
+        except Exception:
+            pass
     pygame.quit()

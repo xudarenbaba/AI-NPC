@@ -19,6 +19,8 @@ class Settings:
     player_id: str = "player_001"
     input_max_chars: int = 500
     input_placeholder: str = "在此输入要说的话…"
+    # Windows 上 True 时 SDL 可能独占键盘、看不到游戏内输入框；默认 False，用按键 unicode + 粘贴输入中文。
+    use_sdl_text_input: bool = False
 
 
 SETTINGS = Settings()

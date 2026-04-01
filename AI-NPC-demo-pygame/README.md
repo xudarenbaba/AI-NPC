@@ -34,7 +34,8 @@ python run.py
 - 输入文字后 `Enter`：发送到 `/chat` 并显示返回台词 / 动作
 - `Esc`：关闭输入框；在主界面则退出游戏
 
-中文输入依赖系统输入法；若无法直接键入，可复制粘贴到输入框。
+默认 **不** 开启 SDL 文本输入（`config.py` 中 `use_sdl_text_input: false`），避免 Windows 上键盘被 IME 独占、看不到游戏内输入条。  
+中文可用 **Ctrl+V 粘贴**；英文可直接键入。若你确认本机 SDL 行为正常，可将 `use_sdl_text_input` 改为 `true` 尝试系统输入法。
 
 ## 请求体补充字段（`scene_info`）
 

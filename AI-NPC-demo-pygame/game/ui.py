@@ -29,10 +29,27 @@ def _make_font(size: int) -> pygame.font.Font:
 
 
 class UI:
+    """底部对话区布局与 `layout_chat_panel` 一致，供 IME 矩形与绘制共用。"""
+
+    PANEL_HEIGHT = 140
+
     def __init__(self) -> None:
         self.font = _make_font(22)
         self.small_font = _make_font(18)
-        self.input_rect = pygame.Rect(16, SETTINGS.window_height - 72, SETTINGS.window_width - 32, 40)
+        w, h = SETTINGS.window_width, SETTINGS.window_height
+        self.input_rect = self._input_rect_for_height(h)
+
+    @staticmethod
+    def _input_rect_for_height(window_h: int) -> pygame.Rect:
+        # 面板内：标题 → 副标题 → 输入框（与 _draw_chat_panel 对齐）
+        top = window_h - UI.PANEL_HEIGHT + 66
+        return pygame.Rect(20, top, SETTINGS.window_width - 40, 40)
+
+    def layout_chat_panel(self, screen: pygame.Surface) -> pygame.Rect:
+        """当前窗口尺寸下的输入框矩形（与绘制一致）。"""
+        _, h = screen.get_size()
+        self.input_rect = self._input_rect_for_height(h)
+        return self.input_rect
 
     def draw(
         self,
@@ -68,7 +85,7 @@ class UI:
         self._draw_hint(screen, nearest_npc, nearest_dist, chat_mode, chat_target)
         self._draw_overlay(screen, nearest_dist, stats)
         if chat_mode:
-            self._draw_chat_input(screen, chat_target, input_buffer, request_pending)
+            self._draw_chat_panel(screen, chat_target, input_buffer, request_pending)
 
     def _draw_grid(self, screen: pygame.Surface) -> None:
         width, height = screen.get_size()
@@ -111,7 +128,9 @@ class UI:
             text = "靠近 NPC 后按 E 开始对话"
             color = TEXT_COLOR
         surf = self.font.render(text, True, color)
-        screen.blit(surf, (20, SETTINGS.window_height - 100))
+        # 对话模式下底部有大面板，提示上移避免被挡住
+        y = SETTINGS.window_height - 155 if chat_mode else SETTINGS.window_height - 100
+        screen.blit(surf, (20, y))
 
     def _draw_overlay(self, screen: pygame.Surface, nearest_dist: float, stats: dict[str, int | str]) -> None:
         status = str(stats.get("status", ""))
@@ -162,27 +181,46 @@ class UI:
             screen.blit(s, (bg_rect.left + pad_x, cy))
             cy += s.get_height() + 2
 
-    def _draw_chat_input(
+    def _draw_chat_panel(
         self,
         screen: pygame.Surface,
         chat_target: NPC | None,
         input_buffer: str,
         request_pending: bool,
     ) -> None:
-        pygame.draw.rect(screen, (40, 44, 52), self.input_rect, border_radius=6)
-        pygame.draw.rect(screen, BUBBLE_BORDER_COLOR, self.input_rect, width=1, border_radius=6)
+        w, h = screen.get_size()
+        panel_top = h - self.PANEL_HEIGHT
+        panel = pygame.Rect(0, panel_top, w, self.PANEL_HEIGHT)
+
+        overlay = pygame.Surface((w, self.PANEL_HEIGHT), pygame.SRCALPHA)
+        overlay.fill((42, 48, 62, 245))
+        screen.blit(overlay, (0, panel_top))
+        pygame.draw.rect(screen, (255, 210, 70), panel, width=4)
+
+        title = self.font.render(
+            "【对话模式】输入后按 Enter 发送，Esc 退出 · Ctrl+V 可粘贴中文",
+            True,
+            (255, 230, 140),
+        )
+        screen.blit(title, (16, panel_top + 10))
+
+        self.input_rect = self._input_rect_for_height(h)
+        pygame.draw.rect(screen, (24, 28, 36), self.input_rect, border_radius=8)
+        pygame.draw.rect(screen, (255, 210, 70), self.input_rect, width=2, border_radius=8)
+
         prefix = "正在发送… " if request_pending else ""
         display = prefix + (input_buffer if input_buffer else SETTINGS.input_placeholder)
-        color = (140, 140, 150) if not input_buffer and not request_pending else TEXT_COLOR
-        surf = self.font.render(display[:200], True, color)
-        screen.blit(surf, (self.input_rect.x + 10, self.input_rect.y + 10))
+        color = (160, 165, 175) if not input_buffer and not request_pending else TEXT_COLOR
+        surf = self.font.render(display[:240], True, color)
+        screen.blit(surf, (self.input_rect.x + 12, self.input_rect.y + 11))
+
         if chat_target is not None:
-            title = self.small_font.render(
-                f"对「{chat_target.display_name}」说：（支持粘贴；部分环境需系统输入法）",
+            sub = self.small_font.render(
+                f"对「{chat_target.display_name}」说",
                 True,
                 HINT_COLOR,
             )
-            screen.blit(title, (self.input_rect.x, self.input_rect.y - 22))
+            screen.blit(sub, (16, panel_top + 38))
 
     def input_screen_rect(self) -> pygame.Rect:
         return self.input_rect
