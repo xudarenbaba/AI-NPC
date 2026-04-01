@@ -25,6 +25,9 @@ python run.py
 - 该子项目用于快速验证“玩家输入 -> `/chat` -> NPC 对话/动作反馈”的最小闭环。
 - 详细说明（运行步骤、交互方式、已知限制）请查看：`AI-NPC-demo-pygame/README.md`。
 
+![模拟游戏界面-2](images/img2.png)
+![模拟游戏界面-3](images/img3.png)
+
 最简联调流程：
 
 1. 在本项目根目录启动后端：`python run.py`
@@ -66,6 +69,8 @@ python run.py
 ## 接口说明
 
 > 该项目对外提供的是 HTTP API。本地有一个测试的web页面。
+
+![主项目接口示意](images/img1.png)
 
 ### POST /chat
 
