@@ -14,9 +14,11 @@ class Settings:
     ai_timeout_seconds: float = 1.2
     ai_cooldown_seconds: float = 2.0
     bubble_duration_seconds: float = 4.0
-    scene_location: str = "village_square"
-    scene_time: str = "day"
+    scene_location: str = "村口广场"
+    scene_time: str = "白天"
     player_id: str = "player_001"
+    input_max_chars: int = 500
+    input_placeholder: str = "在此输入要说的话…"
 
 
 SETTINGS = Settings()

@@ -5,6 +5,7 @@ import pygame
 
 from config import SETTINGS
 from game.models import AiAction, NPC, Player
+from game.npc_profiles import NPC_PROFILES
 
 
 @dataclass
@@ -21,11 +22,20 @@ class World:
             pos=pygame.Vector2(SETTINGS.window_width * 0.5, SETTINGS.window_height * 0.5),
             speed=SETTINGS.player_speed,
         )
-        npcs = [
-            NPC("npc_guard_001", pygame.Vector2(220, 180), SETTINGS.npc_speed),
-            NPC("npc_merchant_001", pygame.Vector2(520, 240), SETTINGS.npc_speed),
-            NPC("npc_oldman_001", pygame.Vector2(760, 360), SETTINGS.npc_speed),
-        ]
+        npcs: list[NPC] = []
+        for p in NPC_PROFILES:
+            npcs.append(
+                NPC(
+                    npc_id=p.npc_id,
+                    display_name=p.display_name,
+                    job=p.job,
+                    task=p.task,
+                    available_actions=p.available_actions,
+                    world_location=dict(p.world_location),
+                    pos=pygame.Vector2(p.screen_x, p.screen_y),
+                    speed=SETTINGS.npc_speed,
+                )
+            )
         return cls(SETTINGS.window_width, SETTINGS.window_height, player, npcs)
 
     def update_player(self, move: pygame.Vector2, dt: float) -> None:
@@ -67,6 +77,20 @@ class World:
                 npc.dialogue_text = action.dialogue.strip()
                 npc.dialogue_until = now_seconds + SETTINGS.bubble_duration_seconds
             npc.runtime_state = "dialogue"
+            return "success"
+
+        if action.action_type == "emote":
+            if action.dialogue.strip():
+                npc.dialogue_text = action.dialogue.strip()
+                npc.dialogue_until = now_seconds + SETTINGS.bubble_duration_seconds
+            npc.runtime_state = "emote"
+            return "success"
+
+        if action.action_type == "use_item":
+            if action.dialogue.strip():
+                npc.dialogue_text = action.dialogue.strip()
+                npc.dialogue_until = now_seconds + SETTINGS.bubble_duration_seconds
+            npc.runtime_state = "use_item"
             return "success"
 
         if action.action_type == "move":

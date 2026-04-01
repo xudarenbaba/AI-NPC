@@ -1,14 +1,12 @@
-# ai-npc-pygame-demo
+# AI-NPC Pygame 演示
 
-一个独立的 Pygame MVP 演示项目，通过 HTTP 调用 `AI-NPC` 服务的 `POST /chat` 接口，实现玩家与 NPC 的最小可玩交互循环。
+位于 `AI-NPC` 仓库内的独立子项目，通过 HTTP 调用本仓库后端的 `POST /chat`，在 2D 场景中演示「靠近 → 输入 → 回车 → 展示 NPC 回复」的最小闭环。
 
-## 目标
+## 角色与坐标
 
-- 玩家可键盘移动
-- 1~3 个 NPC 待机/巡逻
-- 玩家靠近后按 `E` 触发对话
-- 游戏端调用 `AI-NPC` 的 `POST /chat`
-- 支持动作映射：`dialogue / move / idle`
+- 角色定义与 `app/tools/npc_state_tools.py` 中 `NPC_STATE` 对齐（`npc_id`、职业、任务、`available_actions`、**世界坐标** `world_location`）。
+- **屏幕坐标**在 `game/npc_profiles.py` 中单独配置（960×540 场景下的像素位置）。
+- 当前 NPC：**城门守卫、行商、酒馆掌柜、药师、巡山斥候**。
 
 ## 技术栈
 
@@ -16,94 +14,41 @@
 - pygame
 - requests
 
-## 目录结构
-
-```text
-ai-npc-pygame-demo/
-  README.md
-  requirements.txt
-  run.py
-  config.py
-  game/
-    __init__.py
-    constants.py
-    models.py
-    ai_client.py
-    world.py
-    ui.py
-    main_loop.py
-  assets/
-    fonts/
-```
-
-## 后端接口契约
-
-### 请求
-
-`POST http://localhost:5000/chat`
-
-```json
-{
-  "player_id": "player_001",
-  "npc_id": "npc_guard_001",
-  "message": "你好",
-  "scene_info": {
-    "location": "village_square",
-    "time": "day",
-    "distance_to_player": 1.8,
-    "npc_runtime_state": "idle",
-    "last_action_result": "success"
-  }
-}
-```
-
-### 响应
-
-```json
-{
-  "action_type": "dialogue",
-  "dialogue": "你好，旅行者。",
-  "emotion": "friendly",
-  "target_id": null,
-  "extra": {}
-}
-```
-
 ## 运行方式
 
-1. 创建并激活虚拟环境（可选）
-2. 安装依赖：
+1. 在项目根目录启动 AI 后端：`python run.py`（默认 `http://localhost:5000`）。
+2. 安装演示依赖并运行：
 
 ```bash
+cd AI-NPC-demo-pygame
 pip install -r requirements.txt
-```
-
-3. 启动你的 AI-NPC 后端（默认假设在 `http://localhost:5000`）
-4. 运行游戏：
-
-```bash
 python run.py
 ```
 
+（可选）启用 MCP 时另起终端：`python npc_mcp/local_server.py`，并在 `config.yaml` 中 `mcp.enabled: true`。
+
 ## 操作说明
 
-- `WASD` 或方向键：移动玩家
-- `E`：与最近且在范围内的 NPC 交互
-- `ESC`：退出
+- `WASD` / 方向键：移动（**对话输入模式下禁用移动**）
+- `E`：靠近 NPC 后进入对话，底部出现输入框
+- 输入文字后 `Enter`：发送到 `/chat` 并显示返回台词 / 动作
+- `Esc`：关闭输入框；在主界面则退出游戏
 
-## 降级策略
+中文输入依赖系统输入法；若无法直接键入，可复制粘贴到输入框。
 
-- 请求超时（默认 1.2s）：显示本地兜底台词
-- 网络错误：NPC 进入 idle，并显示错误兜底台词
-- 返回字段缺失：忽略本次 action，记录错误计数
-- 每个 NPC 调用冷却（默认 2.0s）防止请求风暴
+## 请求体补充字段（`scene_info`）
 
-## 关键参数（默认）
+除原有字段外，会附带（后端可忽略）：
 
-- 窗口：`960x540`
-- FPS：`60`
-- 玩家速度：`180 px/s`
-- NPC 速度：`90 px/s`
-- 交互距离：`80 px`
-- AI 冷却：`2.0s`
-- AI 超时：`1.2s`
+- `npc_display_name`、`npc_job`、`npc_task`、`npc_available_actions`
+- `npc_world_location`（与 `NPC_STATE` 一致）
+- `npc_screen_pos`、`player_screen_pos`（像素）
+
+## 支持的动作类型
+
+与后端 `ActionResponse` 一致：`dialogue`、`move`、`emote`、`use_item`、`idle`。  
+`move` 的 `extra.target_pos` 约定为 **屏幕像素** `[x, y]`。
+
+## 默认配置
+
+见 `config.py`：`ai_base_url`、`交互距离`、`冷却`、`超时`、`输入最大长度` 等。

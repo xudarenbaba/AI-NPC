@@ -16,28 +16,59 @@ from game.constants import (
     PLAYER_RADIUS,
     TEXT_COLOR,
 )
+from game.models import NPC
 from game.world import World
+
+
+def _make_font(size: int) -> pygame.font.Font:
+    """优先使用可显示中文的系统字体。"""
+    return pygame.font.SysFont(
+        ["Microsoft YaHei", "SimHei", "SimSun", "DengXian", "Noto Sans CJK SC"],
+        size,
+    )
 
 
 class UI:
     def __init__(self) -> None:
-        self.font = pygame.font.Font(None, 24)
-        self.small_font = pygame.font.Font(None, 20)
+        self.font = _make_font(22)
+        self.small_font = _make_font(18)
+        self.input_rect = pygame.Rect(16, SETTINGS.window_height - 72, SETTINGS.window_width - 32, 40)
 
-    def draw(self, screen: pygame.Surface, world: World, now_seconds: float, stats: dict[str, int | str]) -> None:
+    def draw(
+        self,
+        screen: pygame.Surface,
+        world: World,
+        now_seconds: float,
+        stats: dict[str, int | str],
+        *,
+        chat_mode: bool,
+        chat_target: NPC | None,
+        input_buffer: str,
+        request_pending: bool,
+    ) -> None:
         screen.fill(BACKGROUND_COLOR)
         self._draw_grid(screen)
         nearest_npc, nearest_dist = world.nearest_npc()
         for npc in world.npcs:
-            color = NPC_ACTIVE_COLOR if npc is nearest_npc and nearest_dist <= SETTINGS.interact_distance else NPC_COLOR
+            is_target = chat_mode and chat_target is npc
+            in_range = npc is nearest_npc and nearest_dist <= SETTINGS.interact_distance
+            if is_target:
+                color = NPC_ACTIVE_COLOR
+            elif in_range:
+                color = NPC_ACTIVE_COLOR
+            else:
+                color = NPC_COLOR
             pygame.draw.circle(screen, color, (int(npc.pos.x), int(npc.pos.y)), NPC_RADIUS)
-            self._draw_label(screen, npc.npc_id, npc.pos.x - 45, npc.pos.y - 30)
+            self._draw_label(screen, npc.display_name, npc.pos.x - 40, npc.pos.y - 42)
+            self._draw_label(screen, npc.job, npc.pos.x - 40, npc.pos.y - 24, small=True)
             if npc.has_dialogue(now_seconds):
-                self._draw_bubble(screen, npc.dialogue_text, npc.pos.x + 18, npc.pos.y - 50)
+                self._draw_bubble(screen, npc.dialogue_text, npc.pos.x + 18, npc.pos.y - 58)
         pygame.draw.circle(screen, PLAYER_COLOR, (int(world.player.pos.x), int(world.player.pos.y)), PLAYER_RADIUS)
-        self._draw_label(screen, "PLAYER", world.player.pos.x - 25, world.player.pos.y - 30)
-        self._draw_hint(screen, nearest_npc, nearest_dist)
+        self._draw_label(screen, "玩家", world.player.pos.x - 20, world.player.pos.y - 30)
+        self._draw_hint(screen, nearest_npc, nearest_dist, chat_mode, chat_target)
         self._draw_overlay(screen, nearest_dist, stats)
+        if chat_mode:
+            self._draw_chat_input(screen, chat_target, input_buffer, request_pending)
 
     def _draw_grid(self, screen: pygame.Surface) -> None:
         width, height = screen.get_size()
@@ -46,38 +77,112 @@ class UI:
         for y in range(0, height, GRID_SIZE):
             pygame.draw.line(screen, GRID_COLOR, (0, y), (width, y), 1)
 
-    def _draw_label(self, screen: pygame.Surface, text: str, x: float, y: float) -> None:
-        surf = self.small_font.render(text, True, TEXT_COLOR)
+    def _draw_label(
+        self,
+        screen: pygame.Surface,
+        text: str,
+        x: float,
+        y: float,
+        *,
+        small: bool = False,
+    ) -> None:
+        font = self.small_font if small else self.font
+        surf = font.render(text, True, TEXT_COLOR)
         screen.blit(surf, (x, y))
 
-    def _draw_hint(self, screen: pygame.Surface, nearest_npc, nearest_dist: float) -> None:
-        text = "靠近 NPC 按 E 交互"
-        color = TEXT_COLOR
-        if nearest_npc and nearest_dist <= SETTINGS.interact_distance:
-            text = f"按 E 与 {nearest_npc.npc_id} 对话"
+    def _draw_hint(
+        self,
+        screen: pygame.Surface,
+        nearest_npc: NPC | None,
+        nearest_dist: float,
+        chat_mode: bool,
+        chat_target: NPC | None,
+    ) -> None:
+        if chat_mode and chat_target is not None:
+            text = f"与「{chat_target.display_name}」对话中 — Enter 发送 · Esc 取消"
             color = HINT_COLOR
+        elif chat_mode:
+            text = "对话中 — Enter 发送 · Esc 取消"
+            color = HINT_COLOR
+        elif nearest_npc and nearest_dist <= SETTINGS.interact_distance:
+            text = f"按 E 与「{nearest_npc.display_name}」交谈"
+            color = HINT_COLOR
+        else:
+            text = "靠近 NPC 后按 E 开始对话"
+            color = TEXT_COLOR
         surf = self.font.render(text, True, color)
-        screen.blit(surf, (20, SETTINGS.window_height - 32))
+        screen.blit(surf, (20, SETTINGS.window_height - 100))
 
     def _draw_overlay(self, screen: pygame.Surface, nearest_dist: float, stats: dict[str, int | str]) -> None:
+        status = str(stats.get("status", ""))
+        err = status.startswith("异常") or status.startswith("ERR")
         lines = [
-            f"Nearest Dist: {nearest_dist:.1f}px",
-            f"Last latency: {stats['latency_ms']}ms",
-            f"Errors: {stats['error_count']}",
-            f"Status: {stats['status']}",
+            f"最近距离: {nearest_dist:.1f} px",
+            f"上次延迟: {stats['latency_ms']} ms",
+            f"错误次数: {stats['error_count']}",
+            f"状态: {stats['status']}",
         ]
         y = 14
         for line in lines:
-            color = ERROR_COLOR if line.startswith("Status: ERR") else TEXT_COLOR
+            color = ERROR_COLOR if err and line.startswith("状态:") else TEXT_COLOR
             surf = self.small_font.render(line, True, color)
             screen.blit(surf, (14, y))
-            y += 18
+            y += 20
 
     def _draw_bubble(self, screen: pygame.Surface, text: str, x: float, y: float) -> None:
-        surf = self.small_font.render(text, True, TEXT_COLOR)
-        rect = surf.get_rect()
-        rect.topleft = (x, y)
-        bg_rect = rect.inflate(14, 10)
+        max_w = 280
+        words: list[str] = []
+        for part in text.replace("\n", " ").split(" "):
+            if part:
+                words.append(part)
+        lines_out: list[str] = []
+        line = ""
+        for w in words:
+            test = (line + " " + w).strip() if line else w
+            if self.small_font.size(test)[0] <= max_w:
+                line = test
+            else:
+                if line:
+                    lines_out.append(line)
+                line = w
+        if line:
+            lines_out.append(line)
+        if not lines_out:
+            lines_out = [text[:40] + ("…" if len(text) > 40 else "")]
+
+        line_surfs = [self.small_font.render(t, True, TEXT_COLOR) for t in lines_out]
+        total_h = sum(s.get_height() for s in line_surfs) + (len(line_surfs) - 1) * 2
+        max_line_w = max(s.get_width() for s in line_surfs)
+        pad_x, pad_y = 12, 10
+        bg_rect = pygame.Rect(int(x), int(y), max_line_w + pad_x * 2, total_h + pad_y * 2)
         pygame.draw.rect(screen, BUBBLE_BG_COLOR, bg_rect, border_radius=6)
         pygame.draw.rect(screen, BUBBLE_BORDER_COLOR, bg_rect, width=1, border_radius=6)
-        screen.blit(surf, rect)
+        cy = bg_rect.top + pad_y
+        for s in line_surfs:
+            screen.blit(s, (bg_rect.left + pad_x, cy))
+            cy += s.get_height() + 2
+
+    def _draw_chat_input(
+        self,
+        screen: pygame.Surface,
+        chat_target: NPC | None,
+        input_buffer: str,
+        request_pending: bool,
+    ) -> None:
+        pygame.draw.rect(screen, (40, 44, 52), self.input_rect, border_radius=6)
+        pygame.draw.rect(screen, BUBBLE_BORDER_COLOR, self.input_rect, width=1, border_radius=6)
+        prefix = "正在发送… " if request_pending else ""
+        display = prefix + (input_buffer if input_buffer else SETTINGS.input_placeholder)
+        color = (140, 140, 150) if not input_buffer and not request_pending else TEXT_COLOR
+        surf = self.font.render(display[:200], True, color)
+        screen.blit(surf, (self.input_rect.x + 10, self.input_rect.y + 10))
+        if chat_target is not None:
+            title = self.small_font.render(
+                f"对「{chat_target.display_name}」说：（支持粘贴；部分环境需系统输入法）",
+                True,
+                HINT_COLOR,
+            )
+            screen.blit(title, (self.input_rect.x, self.input_rect.y - 22))
+
+    def input_screen_rect(self) -> pygame.Rect:
+        return self.input_rect

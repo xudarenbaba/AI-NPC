@@ -23,6 +23,11 @@ class Player:
 @dataclass
 class NPC:
     npc_id: str
+    display_name: str
+    job: str
+    task: str
+    available_actions: tuple[str, ...]
+    world_location: dict[str, int]
     pos: pygame.Vector2
     speed: float
     runtime_state: str = "idle"

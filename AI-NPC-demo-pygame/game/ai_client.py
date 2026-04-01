@@ -8,6 +8,9 @@ from config import SETTINGS
 from game.models import AiAction, NPC, Player
 
 
+VALID_ACTION_TYPES = frozenset({"dialogue", "move", "emote", "use_item", "idle"})
+
+
 @dataclass
 class AiClientResult:
     action: AiAction
@@ -20,7 +23,13 @@ class AiClient:
     def __init__(self) -> None:
         self.chat_url = f"{SETTINGS.ai_base_url.rstrip('/')}{SETTINGS.ai_chat_path}"
 
-    def request_decision(self, player: Player, npc: NPC, message: str, distance_to_player: float) -> AiClientResult:
+    def request_decision(
+        self,
+        player: Player,
+        npc: NPC,
+        message: str,
+        distance_to_player: float,
+    ) -> AiClientResult:
         payload: dict[str, Any] = {
             "player_id": player.player_id,
             "npc_id": npc.npc_id,
@@ -31,6 +40,16 @@ class AiClient:
                 "distance_to_player": round(distance_to_player, 2),
                 "npc_runtime_state": npc.runtime_state,
                 "last_action_result": npc.last_action_result,
+                "npc_display_name": npc.display_name,
+                "npc_job": npc.job,
+                "npc_task": npc.task,
+                "npc_available_actions": list(npc.available_actions),
+                "npc_world_location": dict(npc.world_location),
+                "npc_screen_pos": {"x": round(float(npc.pos.x), 1), "y": round(float(npc.pos.y), 1)},
+                "player_screen_pos": {
+                    "x": round(float(player.pos.x), 1),
+                    "y": round(float(player.pos.y), 1),
+                },
             },
         }
         start = time.perf_counter()
@@ -40,7 +59,7 @@ class AiClient:
             response.raise_for_status()
             data = response.json()
             action_type = str(data.get("action_type", "")).strip().lower()
-            if action_type not in {"dialogue", "move", "idle"}:
+            if action_type not in VALID_ACTION_TYPES:
                 return AiClientResult(
                     action=AiAction(action_type="idle", dialogue=""),
                     ok=False,
