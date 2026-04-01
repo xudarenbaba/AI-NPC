@@ -1,5 +1,4 @@
 """ 长期记忆：ChromaDB 存储 Lore 与交互记录，RAG 检索 """
-import hashlib
 import uuid
 from pathlib import Path
 from typing import Any
@@ -16,7 +15,19 @@ def _get_embedding_model():
     emb = cfg.get("embeddings", {})
     model_name = emb.get("model", "BAAI/bge-small-zh-v1.5")
     cache_dir = emb.get("cache_dir", "models")
-    return SentenceTransformer(model_name, cache_folder=cache_dir)
+    # 相对路径相对项目根目录，避免从其它 cwd 启动时误用错误目录
+    root = Path(__file__).resolve().parent.parent.parent
+    cache_path = Path(cache_dir)
+    if not cache_path.is_absolute():
+        cache_path = root / cache_path
+    cache_path.mkdir(parents=True, exist_ok=True)
+    # True：仅用本地缓存，不向 Hugging Face 发 HEAD/下载（适合已下过模型或内网环境）
+    local_only = bool(emb.get("local_files_only", False))
+    return SentenceTransformer(
+        model_name,
+        cache_folder=str(cache_path),
+        local_files_only=local_only,
+    )
 
 
 _embedding_model = None

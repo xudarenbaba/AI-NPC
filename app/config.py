@@ -35,6 +35,8 @@ def _default_config() -> dict[str, Any]:
             "provider": "huggingface",
             "model": "BAAI/bge-small-zh-v1.5",
             "cache_dir": "models",
+            # True 时不访问 Hugging Face，仅用 cache_dir 下已有文件（需模型已完整缓存）
+            "local_files_only": False,
         },
         "vectorstore": {
             "persist_dir": "data/chroma",

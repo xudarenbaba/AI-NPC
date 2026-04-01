@@ -26,6 +26,15 @@ def _append_input(buffer: str, text: str) -> str:
     return buffer + text[:room]
 
 
+def _is_effectively_empty_message(s: str) -> bool:
+    """去掉空白与常见零宽字符，避免「看不见的内容」误触发发送。"""
+    if not s:
+        return True
+    for zw in ("\u200b", "\u200c", "\u200d", "\ufeff"):
+        s = s.replace(zw, "")
+    return len(s.strip()) == 0
+
+
 def run_game() -> None:
     # 若仍启用 SDL 文本输入，尽量显示系统 IME 候选窗（需较新 SDL）
     if SETTINGS.use_sdl_text_input:
@@ -116,9 +125,10 @@ def run_game() -> None:
                     if event.key == pygame.K_RETURN or event.key == pygame.K_KP_ENTER:
                         if request_pending:
                             continue
-                        msg = input_buffer.strip()
-                        if not msg:
+                        if _is_effectively_empty_message(input_buffer):
+                            exit_chat()
                             continue
+                        msg = input_buffer.strip()
                         nearest_npc, nearest_dist = world.nearest_npc()
                         if nearest_npc is not chat_target or nearest_dist > SETTINGS.interact_distance:
                             stats["status"] = "已离开对话范围"

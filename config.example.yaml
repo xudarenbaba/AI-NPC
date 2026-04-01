@@ -13,6 +13,8 @@ embeddings:
   provider: huggingface
   model: BAAI/bge-small-zh-v1.5
   cache_dir: models
+  # 已下载模型且不想联网时改为 true；否则会向 Hugging Face 校验元数据，超时即 WinError 10060
+  local_files_only: false
 
 vectorstore:
   persist_dir: data/chroma
