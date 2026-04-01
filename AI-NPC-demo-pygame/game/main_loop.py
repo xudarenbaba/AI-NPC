@@ -36,7 +36,6 @@ def _is_effectively_empty_message(s: str) -> bool:
 
 
 def run_game() -> None:
-    # 若仍启用 SDL 文本输入，尽量显示系统 IME 候选窗（需较新 SDL）
     if SETTINGS.use_sdl_text_input:
         os.environ.setdefault("SDL_IME_SHOW_UI", "1")
 
@@ -62,12 +61,18 @@ def run_game() -> None:
     input_buffer = ""
     request_pending = False
     ime_pending = False
+    chat_transcript: list[tuple[str, str]] = []
+    transcript_scroll = [0]
+    snap_transcript_bottom = [True]
 
     def enter_chat(npc: NPC) -> None:
         nonlocal chat_mode, chat_target, input_buffer, ime_pending
         chat_mode = True
         chat_target = npc
         input_buffer = ""
+        chat_transcript.clear()
+        transcript_scroll[0] = 0
+        snap_transcript_bottom[0] = True
         if SETTINGS.use_sdl_text_input:
             ime_pending = True
 
@@ -78,6 +83,8 @@ def run_game() -> None:
         input_buffer = ""
         request_pending = False
         ime_pending = False
+        chat_transcript.clear()
+        transcript_scroll[0] = 0
         if SETTINGS.use_sdl_text_input:
             try:
                 pygame.key.stop_text_input()
@@ -86,6 +93,8 @@ def run_game() -> None:
 
     def try_paste_to_buffer() -> None:
         nonlocal input_buffer
+        if request_pending:
+            return
         try:
             raw = pygame.scrap.get(pygame.SCRAP_TEXT)
         except Exception:
@@ -98,6 +107,22 @@ def run_game() -> None:
             text = str(raw)
         text = text.replace("\r\n", "\n").replace("\r", "\n")
         input_buffer = _append_input(input_buffer, text)
+
+    def draw_frame(now: float) -> None:
+        ui.draw(
+            screen,
+            world,
+            now,
+            stats,
+            chat_mode=chat_mode,
+            chat_target=chat_target,
+            input_buffer=input_buffer,
+            request_pending=request_pending,
+            chat_transcript=chat_transcript,
+            transcript_scroll=transcript_scroll,
+            snap_transcript_bottom=snap_transcript_bottom,
+        )
+        pygame.display.flip()
 
     while running:
         dt = clock.tick(SETTINGS.fps) / 1000.0
@@ -115,6 +140,9 @@ def run_game() -> None:
         for event in pygame.event.get():
             if event.type == pygame.QUIT:
                 running = False
+            elif event.type == pygame.MOUSEWHEEL and chat_mode:
+                transcript_scroll[0] += int(event.y) * 28
+                snap_transcript_bottom[0] = False
             elif event.type == pygame.KEYDOWN:
                 if event.key == pygame.K_ESCAPE:
                     if chat_mode:
@@ -137,7 +165,16 @@ def run_game() -> None:
                         if now < chat_target.next_ai_time:
                             stats["status"] = "冷却中，请稍候"
                             continue
+
+                        chat_transcript.append(("player", msg))
+                        input_buffer = ""
+                        snap_transcript_bottom[0] = True
+                        draw_frame(now)
+
                         request_pending = True
+                        snap_transcript_bottom[0] = True
+                        draw_frame(now)
+
                         result = ai_client.request_decision(
                             world.player, chat_target, msg, nearest_dist
                         )
@@ -150,22 +187,31 @@ def run_game() -> None:
                             stats["error_count"] = int(stats["error_count"]) + 1
                             stats["status"] = f"异常: {result.error_message}"
 
+                        reply = (result.action.dialogue or "").strip()
+                        if not reply:
+                            if result.ok:
+                                reply = "（本次未返回台词）"
+                            else:
+                                reply = f"（请求失败）{result.error_message}"
+                        chat_transcript.append(("npc", reply))
+                        snap_transcript_bottom[0] = True
+
                         action_result = world.apply_action(chat_target, result.action, now)
                         chat_target.last_action_result = action_result
                         if result.action.action_type == "idle" and result.action.dialogue.strip():
                             chat_target.dialogue_text = result.action.dialogue
                             chat_target.dialogue_until = now + SETTINGS.bubble_duration_seconds
-                        input_buffer = ""
-                    elif event.key == pygame.K_BACKSPACE:
+
+                    elif event.key == pygame.K_BACKSPACE and not request_pending:
                         input_buffer = input_buffer[:-1]
                     elif event.key == pygame.K_v and (event.mod & pygame.KMOD_CTRL):
                         try_paste_to_buffer()
                     elif (
                         not SETTINGS.use_sdl_text_input
+                        and not request_pending
                         and event.unicode
                         and not (event.mod & pygame.KMOD_CTRL)
                     ):
-                        # 默认关闭 SDL 文本输入：用 KEYDOWN.unicode（避免与 TEXTINPUT 双写）
                         ch = event.unicode
                         if ch.isprintable() and ch not in "\r\n\t":
                             input_buffer = _append_input(input_buffer, ch)
@@ -203,17 +249,7 @@ def run_game() -> None:
         world.update_player(move, dt)
         world.update_npcs(dt)
 
-        ui.draw(
-            screen,
-            world,
-            now,
-            stats,
-            chat_mode=chat_mode,
-            chat_target=chat_target,
-            input_buffer=input_buffer,
-            request_pending=request_pending,
-        )
-        pygame.display.flip()
+        draw_frame(now)
 
     if SETTINGS.use_sdl_text_input:
         try:

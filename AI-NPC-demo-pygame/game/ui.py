@@ -5,6 +5,11 @@ from game.constants import (
     BACKGROUND_COLOR,
     BUBBLE_BG_COLOR,
     BUBBLE_BORDER_COLOR,
+    CHAT_NPC_BUBBLE_BG,
+    CHAT_NPC_BUBBLE_BORDER,
+    CHAT_PLAYER_BUBBLE_BG,
+    CHAT_PLAYER_BUBBLE_BORDER,
+    CHAT_VIEWPORT_BG,
     ERROR_COLOR,
     GRID_COLOR,
     GRID_SIZE,
@@ -28,18 +33,46 @@ def _make_font(size: int) -> pygame.font.Font:
     )
 
 
-class UI:
-    """对话使用屏幕中央模态框，避免底部被任务栏/缩放裁切或 SRCALPHA 绘制异常看不到。"""
+def _wrap_text_to_width(font: pygame.font.Font, text: str, max_width: int) -> list[str]:
+    """按像素宽度折行（支持中文，按字符累加）。"""
+    text = text.replace("\r\n", "\n").replace("\r", "\n")
+    lines_out: list[str] = []
+    for para in text.split("\n"):
+        if not para:
+            lines_out.append("")
+            continue
+        current = ""
+        for ch in para:
+            test = current + ch
+            if font.size(test)[0] <= max_width:
+                current = test
+            else:
+                if current:
+                    lines_out.append(current)
+                current = ch
+        if current:
+            lines_out.append(current)
+    return lines_out if lines_out else [""]
 
-    MODAL_W = 680
-    MODAL_H = 260
+
+class UI:
+    """中央对话窗：标题为 NPC 名称，中间为双方聊天记录，底部为输入行。"""
+
+    MODAL_W = 760
+    MODAL_H = 480
+    TRANSCRIPT_PAD = 14
+    LINE_GAP = 4
+    BUBBLE_PAD_X = 12
+    BUBBLE_PAD_Y = 8
+    INPUT_H = 50
 
     def __init__(self) -> None:
-        self.font = _make_font(22)
-        self.small_font = _make_font(18)
+        self.font = _make_font(20)
+        self.small_font = _make_font(16)
+        self.title_font = _make_font(24)
         self.input_rect = pygame.Rect(0, 0, 100, 40)
 
-    def modal_box_rect(self, screen: pygame.Surface) -> pygame.Rect:
+    def modal_outer_rect(self, screen: pygame.Surface) -> pygame.Rect:
         w, h = screen.get_size()
         return pygame.Rect(
             w // 2 - self.MODAL_W // 2,
@@ -48,10 +81,26 @@ class UI:
             self.MODAL_H,
         )
 
+    def transcript_viewport_rect(self, screen: pygame.Surface) -> pygame.Rect:
+        box = self.modal_outer_rect(screen)
+        top = box.y + 52
+        bottom = box.bottom - self.INPUT_H - 56
+        return pygame.Rect(
+            box.x + self.TRANSCRIPT_PAD,
+            top,
+            box.w - self.TRANSCRIPT_PAD * 2,
+            max(40, bottom - top),
+        )
+
     def layout_chat_panel(self, screen: pygame.Surface) -> pygame.Rect:
-        """与 `_draw_chat_modal` 中输入框一致，供 SDL 文本输入定位。"""
-        box = self.modal_box_rect(screen)
-        self.input_rect = pygame.Rect(box.x + 20, box.bottom - 68, box.w - 40, 46)
+        """底部输入框，供 SDL 文本输入定位。"""
+        box = self.modal_outer_rect(screen)
+        self.input_rect = pygame.Rect(
+            box.x + 20,
+            box.bottom - self.INPUT_H - 18,
+            box.w - 40,
+            self.INPUT_H,
+        )
         return self.input_rect
 
     def draw(
@@ -65,6 +114,9 @@ class UI:
         chat_target: NPC | None,
         input_buffer: str,
         request_pending: bool,
+        chat_transcript: list[tuple[str, str]],
+        transcript_scroll: list[int],
+        snap_transcript_bottom: list[bool],
     ) -> None:
         screen.fill(BACKGROUND_COLOR)
         self._draw_grid(screen)
@@ -89,7 +141,15 @@ class UI:
             self._draw_hint(screen, nearest_npc, nearest_dist)
         self._draw_overlay(screen, nearest_dist, stats)
         if chat_mode:
-            self._draw_chat_modal(screen, chat_target, input_buffer, request_pending)
+            self._draw_chat_dialog(
+                screen,
+                chat_target,
+                input_buffer,
+                request_pending,
+                chat_transcript,
+                transcript_scroll,
+                snap_transcript_bottom,
+            )
 
     def _draw_grid(self, screen: pygame.Surface) -> None:
         width, height = screen.get_size()
@@ -118,7 +178,7 @@ class UI:
         nearest_dist: float,
     ) -> None:
         if nearest_npc and nearest_dist <= SETTINGS.interact_distance:
-            text = f"按 E 与「{nearest_npc.display_name}」交谈（对话框在屏幕中央）"
+            text = f"按 E 打开与「{nearest_npc.display_name}」的对话窗口"
             color = HINT_COLOR
         else:
             text = "靠近 NPC 后按 E 开始对话"
@@ -175,12 +235,15 @@ class UI:
             screen.blit(s, (bg_rect.left + pad_x, cy))
             cy += s.get_height() + 2
 
-    def _draw_chat_modal(
+    def _draw_chat_dialog(
         self,
         screen: pygame.Surface,
         chat_target: NPC | None,
         input_buffer: str,
         request_pending: bool,
+        chat_transcript: list[tuple[str, str]],
+        transcript_scroll: list[int],
+        snap_transcript_bottom: list[bool],
     ) -> None:
         w, h = screen.get_size()
         dim = pygame.Surface((w, h))
@@ -188,33 +251,106 @@ class UI:
         dim.set_alpha(165)
         screen.blit(dim, (0, 0))
 
-        box = self.modal_box_rect(screen)
-        pygame.draw.rect(screen, (44, 50, 64), box, border_radius=14)
-        pygame.draw.rect(screen, (255, 200, 60), box, width=5, border_radius=14)
+        box = self.modal_outer_rect(screen)
+        pygame.draw.rect(screen, (40, 46, 58), box, border_radius=16)
+        pygame.draw.rect(screen, (255, 200, 70), box, width=4, border_radius=16)
 
-        title = self.font.render("【对话】", True, (255, 230, 140))
-        screen.blit(title, (box.x + 20, box.y + 18))
+        npc_name = chat_target.display_name if chat_target is not None else "NPC"
+        npc_id = chat_target.npc_id if chat_target is not None else ""
+        title = self.title_font.render(f"与「{npc_name}」对话", True, (255, 235, 160))
+        screen.blit(title, (box.x + 20, box.y + 14))
+        if npc_id:
+            sub = self.small_font.render(f"{npc_id} · Enter 发送 · 空行+Enter 关闭 · Esc 退出 · Ctrl+V 粘贴", True, HINT_COLOR)
+        else:
+            sub = self.small_font.render("Enter 发送 · 空行+Enter 关闭 · Esc 退出 · Ctrl+V 粘贴", True, HINT_COLOR)
+        screen.blit(sub, (box.x + 20, box.y + 44))
 
-        line1 = self.small_font.render(
-            "输入台词后按 Enter 发送 · 空行 + Enter 退出 · Esc 取消 · Ctrl+V 粘贴中文",
-            True,
-            HINT_COLOR,
-        )
-        screen.blit(line1, (box.x + 20, box.y + 52))
+        vp = self.transcript_viewport_rect(screen)
+        pygame.draw.rect(screen, CHAT_VIEWPORT_BG, vp, border_radius=10)
+        pygame.draw.rect(screen, (70, 76, 88), vp, width=1, border_radius=10)
 
-        name = chat_target.display_name if chat_target is not None else "NPC"
-        line2 = self.font.render(f"对「{name}」说：", True, TEXT_COLOR)
-        screen.blit(line2, (box.x + 20, box.y + 86))
+        bubble_max_w = max(120, vp.w - 56)
+        # 预计算内容总高（与绘制循环一致）
+        blocks: list[tuple[str, str, list[str], int]] = []
+        total_h = 0
+        for role, body in chat_transcript:
+            lines = _wrap_text_to_width(self.font, body, bubble_max_w)
+            label_h = self.small_font.get_height() + 4
+            bubble_h = self.BUBBLE_PAD_Y * 2 + len(lines) * (self.font.get_height() + self.LINE_GAP)
+            block_h = label_h + bubble_h + 10
+            blocks.append((role, body, lines, block_h))
+            total_h += block_h
+        if request_pending:
+            total_h += self.small_font.get_height() + 4 + self.font.get_height() + 20
 
-        self.input_rect = pygame.Rect(box.x + 20, box.bottom - 68, box.w - 40, 46)
-        pygame.draw.rect(screen, (22, 26, 34), self.input_rect, border_radius=10)
-        pygame.draw.rect(screen, (255, 200, 60), self.input_rect, width=3, border_radius=10)
+        view_h = vp.height
+        max_scroll = max(0, total_h - view_h)
+        if snap_transcript_bottom and snap_transcript_bottom[0]:
+            transcript_scroll[0] = max_scroll
+            snap_transcript_bottom[0] = False
+        transcript_scroll[0] = max(0, min(transcript_scroll[0], max_scroll))
 
-        prefix = "正在发送… " if request_pending else ""
+        clip = screen.get_clip()
+        screen.set_clip(vp)
+        scroll = transcript_scroll[0]
+        y_content = vp.y - scroll
+
+        for role, _body, lines, block_h in blocks:
+            is_player = role == "player"
+            label = "你" if is_player else npc_name
+            label_color = CHAT_PLAYER_BUBBLE_BORDER if is_player else CHAT_NPC_BUBBLE_BORDER
+            bubble_bg = CHAT_PLAYER_BUBBLE_BG if is_player else CHAT_NPC_BUBBLE_BG
+            bubble_bd = CHAT_PLAYER_BUBBLE_BORDER if is_player else CHAT_NPC_BUBBLE_BORDER
+
+            label_s = self.small_font.render(label, True, label_color)
+            if is_player:
+                label_x = vp.right - label_s.get_width() - 8
+            else:
+                label_x = vp.x + 8
+            screen.blit(label_s, (label_x, y_content))
+
+            line_surfs = [self.font.render(t, True, TEXT_COLOR) for t in lines]
+            bw = min(
+                bubble_max_w,
+                max((s.get_width() for s in line_surfs), default=0) + self.BUBBLE_PAD_X * 2,
+            )
+            bh = self.BUBBLE_PAD_Y * 2 + len(line_surfs) * (self.font.get_height() + self.LINE_GAP)
+            if is_player:
+                bx = vp.right - bw - 8
+            else:
+                bx = vp.x + 8
+            by = y_content + label_s.get_height() + 4
+            bubble_r = pygame.Rect(bx, by, bw, bh)
+            pygame.draw.rect(screen, bubble_bg, bubble_r, border_radius=10)
+            pygame.draw.rect(screen, bubble_bd, bubble_r, width=2, border_radius=10)
+
+            ty = by + self.BUBBLE_PAD_Y
+            for s in line_surfs:
+                sx = bx + self.BUBBLE_PAD_X
+                screen.blit(s, (sx, ty))
+                ty += s.get_height() + self.LINE_GAP
+
+            y_content += block_h
+
+        if request_pending:
+            hint = self.small_font.render(npc_name, True, CHAT_NPC_BUBBLE_BORDER)
+            screen.blit(hint, (vp.x + 8, y_content))
+            wait = self.font.render("正在回复…", True, (200, 200, 200))
+            screen.blit(wait, (vp.x + 8, y_content + hint.get_height() + 4))
+
+        screen.set_clip(clip)
+
+        self.layout_chat_panel(screen)
+        pygame.draw.rect(screen, (20, 24, 30), self.input_rect, border_radius=10)
+        pygame.draw.rect(screen, (255, 200, 70), self.input_rect, width=2, border_radius=10)
+
+        prefix = "等待回复中，输入已锁定 · " if request_pending else ""
         display = prefix + (input_buffer if input_buffer else SETTINGS.input_placeholder)
-        color = (150, 155, 165) if not input_buffer and not request_pending else TEXT_COLOR
-        surf = self.font.render(display[:220], True, color)
-        screen.blit(surf, (self.input_rect.x + 12, self.input_rect.y + 12))
+        color = (140, 145, 155) if not input_buffer and not request_pending else TEXT_COLOR
+        if request_pending:
+            color = (160, 160, 165)
+        surf = self.font.render(display[:300], True, color)
+        screen.blit(surf, (self.input_rect.x + 12, self.input_rect.y + 14))
 
     def input_screen_rect(self) -> pygame.Rect:
         return self.input_rect
