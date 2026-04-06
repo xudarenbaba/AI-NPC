@@ -55,6 +55,8 @@ python run.py
 - **推理**：把召回片段拼入 system/user prompt，要求模型通过 `npc_action` 工具输出结构化动作。
 - **写回沉淀**：根据 `use_consolidation` 配置，把本轮交互写回 ChromaDB（供后续 RAG 检索）。
 
+![langgraph结构图](images/img0.png)
+
 ## 详细运行与配置
 
 `快速启动` 一节已经包含最小运行命令；这里补充需要注意的配置项：
