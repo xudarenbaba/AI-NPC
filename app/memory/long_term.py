@@ -1,5 +1,7 @@
-""" 长期记忆：ChromaDB 存储 Lore 与交互记录，RAG 检索 """
+"""长期记忆：单集合 + metadata 分类（world/persona/dialogue）。"""
 import uuid
+from datetime import datetime, timezone
+import hashlib
 from pathlib import Path
 from typing import Any
 
@@ -42,7 +44,7 @@ def _embed_fn(texts: list[str]) -> list[list[float]]:
 
 
 class LongTermMemory:
-    """ChromaDB 封装：kbase（交互 + 可选 Lore）与 lore 集合"""
+    """ChromaDB 封装：单集合 memory，靠 metadata 做逻辑分层。"""
 
     def __init__(self):
         cfg = load_config()
@@ -53,65 +55,45 @@ class LongTermMemory:
             path=str(persist_dir),
             settings=Settings(anonymized_telemetry=False),
         )
-        self._collection_name = vs.get("collection_name", "kbase")
-        self._lore_name = vs.get("lore_collection_name", "lore")
-        self._k = cfg.get("memory", {}).get("rag_top_k", 5)
+        self._collection_name = vs.get("collection_name", "memory")
+        mem = cfg.get("memory", {})
+        self._k_world = int(mem.get("k_world", 3))
+        self._k_persona = int(mem.get("k_persona", 3))
+        self._k_dialogue = int(mem.get("k_dialogue", 5))
 
     def _get_collection(self, name: str):
         return self._client.get_or_create_collection(
             name=name,
-            metadata={"description": "NPC long-term memory"},
+            metadata={"description": "AI NPC unified memory store"},
         )
 
-    def add_documents(
+    def add_memory(
         self,
         texts: list[str],
-        metadatas: list[dict[str, Any]] | None = None,
-        collection: str | None = None,
+        metadatas: list[dict[str, Any]],
         ids: list[str] | None = None,
     ) -> list[str]:
-        """写入文档。若未提供 ids 则自动生成。返回实际使用的 id 列表。"""
-        coll_name = collection or self._collection_name
-        coll = self._get_collection(coll_name)
+        """写入统一 memory 集合。"""
+        coll = self._get_collection(self._collection_name)
         if not texts:
             return []
+        if len(metadatas) != len(texts):
+            raise ValueError("metadatas length must equal texts length")
         if ids is None:
             ids = [str(uuid.uuid4()) for _ in texts]
-        if metadatas is None:
-            metadatas = [{}] * len(texts)
-        if len(metadatas) < len(texts):
-            metadatas = metadatas + [{}] * (len(texts) - len(metadatas))
         embeddings = _embed_fn(texts)
-        coll.add(ids=ids, embeddings=embeddings, documents=texts, metadatas=metadatas)
+        # 使用 upsert 便于按固定 id 去重导入（重复导入会更新而非报错）
+        coll.upsert(ids=ids, embeddings=embeddings, documents=texts, metadatas=metadatas)
         return ids
 
-    def search(
+    def _query_documents(
         self,
         query: str,
-        k: int | None = None,
-        filter_by_player: str | None = None,
-        filter_by_npc: str | None = None,
-        include_lore: bool = True,
+        *,
+        where: dict[str, Any],
+        k: int,
     ) -> list[str]:
-        """
-        语义检索：先查 kbase（可选按 player_id 过滤），若 include_lore 再查 lore，合并去重后返回文本列表。
-        """
-        k = k or self._k
-        results: list[str] = []
-        seen: set[str] = set()
-
-        # 交互记忆（kbase）
-        coll = self._client.get_or_create_collection(
-            name=self._collection_name,
-            metadata={"description": "NPC long-term memory"},
-        )
-        where: dict[str, Any] | None = None
-        if filter_by_player or filter_by_npc:
-            where = {}
-            if filter_by_player:
-                where["player_id"] = filter_by_player
-            if filter_by_npc:
-                where["npc_id"] = filter_by_npc
+        coll = self._get_collection(self._collection_name)
         try:
             q_emb = _embed_fn([query])[0]
             raw = coll.query(
@@ -120,42 +102,101 @@ class LongTermMemory:
                 where=where,
                 include=["documents"],
             )
-            if raw and raw.get("documents") and raw["documents"][0]:
-                for doc in raw["documents"][0]:
-                    if doc and doc not in seen:
-                        seen.add(doc)
-                        results.append(doc)
+            docs = raw.get("documents", [[]])[0] if raw else []
+            return [doc for doc in docs if doc]
         except Exception:
-            pass
+            return []
 
-        # 世界观 Lore
-        if include_lore and k - len(results) > 0:
-            try:
-                lore_coll = self._client.get_or_create_collection(
-                    name=self._lore_name,
-                    metadata={"description": "World lore"},
-                )
-                q_emb = _embed_fn([query])[0]
-                raw = lore_coll.query(
-                    query_embeddings=[q_emb],
-                    n_results=max(1, k - len(results)),
-                    include=["documents"],
-                )
-                if raw and raw.get("documents") and raw["documents"][0]:
-                    for doc in raw["documents"][0]:
-                        if doc and doc not in seen:
-                            seen.add(doc)
-                            results.append(doc)
-            except Exception:
-                pass
+    def add_world(self, texts: list[str], ids: list[str] | None = None) -> list[str]:
+        now = datetime.now(timezone.utc).isoformat()
+        if ids is None:
+            ids = [
+                f"world:{hashlib.sha1(t.strip().encode('utf-8')).hexdigest()}"
+                for t in texts
+            ]
+        metas = [
+            {
+                "memory_type": "world",
+                "scope": "global",
+                "source": "import",
+                "created_at": now,
+            }
+            for _ in texts
+        ]
+        return self.add_memory(texts=texts, metadatas=metas, ids=ids)
 
-        return results
+    def add_persona(self, npc_id: str, texts: list[str], ids: list[str] | None = None) -> list[str]:
+        now = datetime.now(timezone.utc).isoformat()
+        if ids is None:
+            ids = [
+                f"persona:{npc_id}:{hashlib.sha1(t.strip().encode('utf-8')).hexdigest()}"
+                for t in texts
+            ]
+        metas = [
+            {
+                "memory_type": "persona",
+                "scope": "npc",
+                "npc_id": npc_id,
+                "source": "seed",
+                "created_at": now,
+            }
+            for _ in texts
+        ]
+        return self.add_memory(texts=texts, metadatas=metas, ids=ids)
 
-    def add_lore(self, texts: list[str], ids: list[str] | None = None) -> list[str]:
-        """向 lore 集合写入世界观片段。"""
-        return self.add_documents(
-            texts=texts,
-            metadatas=[{"type": "world"}] * len(texts),
-            collection=self._lore_name,
-            ids=ids,
+    def add_dialogue(
+        self,
+        npc_id: str | None,
+        player_id: str,
+        texts: list[str],
+        *,
+        scene_info: dict[str, Any] | None = None,
+        ids: list[str] | None = None,
+    ) -> list[str]:
+        now = datetime.now(timezone.utc).isoformat()
+        npc_value = npc_id or "default"
+        scene = str(scene_info) if scene_info else ""
+        metas = [
+            {
+                "memory_type": "dialogue",
+                "scope": "npc_player",
+                "npc_id": npc_value,
+                "player_id": player_id,
+                "source": "runtime",
+                "scene": scene,
+                "created_at": now,
+            }
+            for _ in texts
+        ]
+        return self.add_memory(texts=texts, metadatas=metas, ids=ids)
+
+    def search_world(self, query: str, k: int | None = None) -> list[str]:
+        return self._query_documents(
+            query,
+            where={"memory_type": "world"},
+            k=k or self._k_world,
+        )
+
+    def search_persona(self, query: str, npc_id: str | None, k: int | None = None) -> list[str]:
+        return self._query_documents(
+            query,
+            where={"memory_type": "persona", "npc_id": npc_id or "default"},
+            k=k or self._k_persona,
+        )
+
+    def search_dialogue(
+        self,
+        query: str,
+        npc_id: str | None,
+        player_id: str,
+        k: int | None = None,
+    ) -> list[str]:
+        return self._query_documents(
+            query,
+            where={
+                "memory_type": "dialogue",
+                "npc_id": npc_id or "default",
+                "player_id": player_id,
+            },
+            k=k or self._k_dialogue,
         )

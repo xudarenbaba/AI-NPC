@@ -1,4 +1,4 @@
-""" 将 lore 目录下的文本文件导入 ChromaDB lore 集合，供 RAG 检索 """
+"""将 lore 目录下的文本文件导入统一 memory（memory_type=world）。"""
 import sys
 from pathlib import Path
 
@@ -39,8 +39,8 @@ def main() -> None:
     if not all_chunks:
         print("未找到可导入的 .md 内容")
         return
-    store.add_lore(all_chunks)
-    print(f"已导入 {len(all_chunks)} 段到 lore 集合。")
+    store.add_world(all_chunks)
+    print(f"已导入 {len(all_chunks)} 段到 world memory。")
 
 
 if __name__ == "__main__":

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 import logging
-from typing import Any, Literal, TypedDict
+from typing import Any, TypedDict
 
 from langgraph.graph import END, StateGraph
 
@@ -31,8 +31,9 @@ class AgentState(TypedDict, total=False):
     scene_info: dict[str, Any]
 
     short_term_history: list[dict[str, Any]]
-    long_term_npc_chunks: list[str]
-    long_term_world_chunks: list[str]
+    world_chunks: list[str]
+    persona_chunks: list[str]
+    dialogue_chunks: list[str]
     messages: list[dict[str, Any]]
     action: ActionResponse
 
@@ -51,8 +52,9 @@ def build_agent_graph():
     def retrieve(state: AgentState) -> AgentState:
         cfg = load_config()
         if not cfg.get("use_rag", True):
-            state["long_term_npc_chunks"] = []
-            state["long_term_world_chunks"] = []
+            state["world_chunks"] = []
+            state["persona_chunks"] = []
+            state["dialogue_chunks"] = []
             logger.info("RAG disabled by config.")
             return state
 
@@ -71,33 +73,20 @@ def build_agent_graph():
         if scene_info:
             query = f"scene:{scene_info}\n" + query
 
-        # 分层检索：
-        # 1) NPC 专属知识：仅检索 kbase（交互记忆，且可按 npc_id 过滤）
-        npc_chunks = long_term.search(
-            query,
-            filter_by_player=player_id,
-            filter_by_npc=npc_id,
-            include_lore=False,
-        )
+        world_chunks = long_term.search_world(query)
+        persona_chunks = long_term.search_persona(query, npc_id)
+        dialogue_chunks = long_term.search_dialogue(query, npc_id, player_id)
 
-        # 2) 全局世界观：在“kbase + lore”结果中剔除已命中的 npc_chunks，剩余部分作为 world/lore 增量
-        all_chunks = long_term.search(
-            query,
-            filter_by_player=player_id,
-            filter_by_npc=npc_id,
-            include_lore=True,
-        )
-        npc_set = set(npc_chunks or [])
-        world_chunks = [c for c in (all_chunks or []) if c not in npc_set]
-
-        state["long_term_npc_chunks"] = npc_chunks or []
-        state["long_term_world_chunks"] = world_chunks
+        state["world_chunks"] = world_chunks or []
+        state["persona_chunks"] = persona_chunks or []
+        state["dialogue_chunks"] = dialogue_chunks or []
         logger.info(
-            "RAG retrieve done. player_id=%s npc_id=%s npc_chunks=%s world_chunks=%s",
+            "RAG retrieve done. player_id=%s npc_id=%s world=%s persona=%s dialogue=%s",
             player_id,
             npc_id,
-            len(state["long_term_npc_chunks"]),
-            len(state["long_term_world_chunks"]),
+            len(state["world_chunks"]),
+            len(state["persona_chunks"]),
+            len(state["dialogue_chunks"]),
         )
         return state
 
@@ -119,8 +108,9 @@ def build_agent_graph():
             npc_id=state.get("npc_id"),
             scene_info=state.get("scene_info") or {},
             short_term_history=state.get("short_term_history") or None,
-            long_term_npc_chunks=state.get("long_term_npc_chunks") or None,
-            long_term_world_chunks=state.get("long_term_world_chunks") or None,
+            world_chunks=state.get("world_chunks") or None,
+            persona_chunks=state.get("persona_chunks") or None,
+            dialogue_chunks=state.get("dialogue_chunks") or None,
         )
         logger.info("Prompt built. messages=%s", len(state["messages"]))
         return state
@@ -250,7 +240,8 @@ def build_agent_graph():
 
     def store_memory(state: AgentState) -> AgentState:
         # 把本轮交互写入 ChromaDB（让下一轮能被 RAG 检索到）
-        if not load_config().get("use_consolidation", True):
+        cfg = load_config()
+        if not cfg.get("use_consolidation", True):
             logger.info("Consolidation disabled by config.")
             return state
 
@@ -261,14 +252,20 @@ def build_agent_graph():
         action = state.get("action")
         if not player_id or not action:
             return state
+        min_chars = int(cfg.get("memory", {}).get("dialogue_store_min_chars", 0))
+        if len((action.dialogue or "").strip()) < min_chars:
+            logger.info("Skip long-term write: dialogue too short. min=%s", min_chars)
+            return state
 
         text = f"玩家说：{message}；NPC 回复：{action.dialogue}"
         if scene_info:
             text = f"[场景 {scene_info}] " + text
 
-        long_term.add_documents(
+        long_term.add_dialogue(
+            npc_id=npc_id,
+            player_id=player_id,
             texts=[text],
-            metadatas=[{"player_id": player_id, "npc_id": npc_id, "type": "interaction"}],
+            scene_info=scene_info,
         )
         logger.info("Long-term memory stored. player_id=%s npc_id=%s", player_id, npc_id)
         return state

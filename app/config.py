@@ -40,12 +40,14 @@ def _default_config() -> dict[str, Any]:
         },
         "vectorstore": {
             "persist_dir": "data/chroma",
-            "collection_name": "kbase",
-            "lore_collection_name": "lore",
+            "collection_name": "memory",
         },
         "memory": {
             "short_term_turns": 10,
-            "rag_top_k": 5,
+            "k_world": 3,
+            "k_persona": 3,
+            "k_dialogue": 5,
+            "dialogue_store_min_chars": 6,
         },
         "mcp": {
             "enabled": True,

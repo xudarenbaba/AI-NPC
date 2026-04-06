@@ -51,11 +51,22 @@ python run.py
 ```
 
 - **Gateway**：`POST /chat` 接收 `player_id`、`message`、`scene_info`、可选 `npc_id`，返回动作 JSON。
-- **RAG 检索**：ChromaDB(长期记忆) 按语义检索召回相关片段（世界观 Lore + 交互记忆）。
+- **RAG 检索**：ChromaDB(长期记忆) 按 metadata 分类检索三类片段（世界观 / 角色设定 / 角色-玩家历史）。
 - **推理**：把召回片段拼入 system/user prompt，要求模型通过 `npc_action` 工具输出结构化动作。
 - **写回沉淀**：根据 `use_consolidation` 配置，把本轮交互写回 ChromaDB（供后续 RAG 检索）。
 
 ![langgraph结构图](images/img0.png)
+
+## 记忆系统设计
+
+长期记忆基于 **ChromaDB 单集合 `memory`**，通过 metadata 分为三类：
+
+- `memory_type=world`：世界观设定（全角色共享）
+- `memory_type=persona`：角色设定（按 `npc_id` 隔离）
+- `memory_type=dialogue`：角色与玩家历史（按 `npc_id + player_id` 隔离）
+
+每轮对话检索固定三段（world/persona/dialogue）并拼入 prompt；短期记忆仍在内存中按 `player_id+npc_id` 维护。  
+写回阶段仅沉淀 `dialogue`（受 `use_consolidation` 与 `memory.dialogue_store_min_chars` 控制）。
 
 ## 详细运行与配置
 
@@ -125,17 +136,29 @@ python run.py
 | embeddings.* | 向量化模型（用于 RAG），默认 BGE 中文 |
 | vectorstore.* | ChromaDB 持久化目录与集合名 |
 | memory.short_term_turns | 短期记忆保留轮数 |
-| memory.rag_top_k | RAG 召回条数 |
+| memory.k_world | 世界观检索召回条数 |
+| memory.k_persona | 角色设定检索召回条数 |
+| memory.k_dialogue | 角色-玩家历史检索召回条数 |
+| memory.dialogue_store_min_chars | 对话写回长期记忆的最小长度阈值 |
 | mcp.enabled | 是否启用 MCP 工具动态发现与调用 |
 | mcp.command | 启动 MCP 服务进程的命令（默认当前 python） |
 | mcp.args | 启动 MCP 服务参数（默认 `npc_mcp/local_server.py`） |
 
 ## 世界观 (Lore) 导入
 
-可将静态世界观文本写入 ChromaDB 的 `lore` 集合，供 RAG 检索。你可以直接使用内置脚本把 `lore/*.md` 导入：
+可将静态世界观文本写入统一 memory（`memory_type=world`）。你可以直接使用内置脚本把 `lore/*.md` 导入：
 
 ```bash
 python scripts/import_lore.py
+```
+
+## 角色设定导入
+
+每个 NPC 使用一个独立的 markdown 文件，路径为 `lore/persona/<npc_id>.md`。  
+执行导入脚本后会按文件名识别 `npc_id`，并按内容哈希生成稳定 ID，重复执行会自动去重更新。
+
+```bash
+python scripts/import_persona.py
 ```
 
 ## 技术栈
@@ -174,8 +197,8 @@ python scripts/import_lore.py
   - `response.py`：定义后端返回动作结构 `ActionResponse`（`action_type`、`dialogue`、`emotion`、`target_id`、`extra`）。
 - `app/memory/`
   - `__init__.py`：导出记忆模块。
-  - `short_term.py`：短期记忆模块（当前 LangGraph 主链路未接入，保留供后续扩展）。
-  - `long_term.py`：长期记忆与 RAG（ChromaDB 持久化，提供 `search()` / `add_documents()`）。
+  - `short_term.py`：短期记忆模块（按 `player_id+npc_id` 维护最近对话轮次）。
+  - `long_term.py`：长期记忆与 RAG（ChromaDB 单集合 + metadata 分类，提供 `search_world/search_persona/search_dialogue` 与 `add_world/add_persona/add_dialogue`）。
 - `app/integrations/`
   - `mcp_client.py`：MCP 客户端封装，使用 stdio 连接 `npc_mcp/local_server.py`，提供 `list_tools()` / `call_tool()`。
 - `app/reasoning/`（推理）
@@ -194,7 +217,8 @@ python scripts/import_lore.py
 - `index.html`：`GET /` 的最简页面（仅用于调试，通常不参与 `/chat` 主链路）。
 
 ### `scripts/`
-- `import_lore.py`：把 `lore/` 下的文本切片后写入 ChromaDB（用于 RAG 的 lore 检索）。
+- `import_lore.py`：把 `lore/` 下的文本切片后写入统一 memory（`memory_type=world`）。
+- `import_persona.py`：读取 `lore/persona/*.md`，按 `npc_id` 导入角色设定到统一 memory（`memory_type=persona`，支持去重）。
 
 ### `npc_mcp/`
 - `local_server.py`：本地 MCP 服务，挂载 `get_npc_runtime_state(npc_id)` 工具。
@@ -235,16 +259,17 @@ python run.py
 1. 前端（游戏客户端）向后端发送 `POST /chat`，JSON 输入：`player_id`、`message`、可选 `scene_info`、可选 `npc_id`。
 2. `app/main.py` 的 `/chat` 路由处理函数读取 JSON 并构建 `ChatRequest`。
 3. 路由函数调用 `agent_graph.invoke(...)`（`app/langgraph_agent.py` 中的 LangGraph 图编排）并把输入放进图的 `state`；同时传入 `recursion_limit` 用于防止无限循环。
-4. LangGraph 节点 `retrieve`：调用 `LongTermMemory.search()`（内部使用 sentence-transformers + ChromaDB）  
+4. LangGraph 节点 `retrieve`：调用 `LongTermMemory.search_world/search_persona/search_dialogue()`（内部使用 sentence-transformers + ChromaDB）  
    - 输入：`player_id / npc_id / message / scene_info`  
    - 输出：
-     - `state.long_term_npc_chunks: list[str]`（NPC 专属：仅检索 kbase/交互记忆）
-     - `state.long_term_world_chunks: list[str]`（全局世界观：在 kbase+lore 中取 lore 增量）
+     - `state.world_chunks: list[str]`（全局世界观，所有角色共享）
+     - `state.persona_chunks: list[str]`（当前 NPC 的角色设定）
+     - `state.dialogue_chunks: list[str]`（当前 NPC 与玩家的长期互动记忆）
 5. LangGraph 节点 `get_short_term_history`：调用 `ShortTermMemory.get_recent()`  
    - 输入：`player_id / npc_id`  
    - 输出：`state.short_term_history: list[{"role","content"}]`
 6. LangGraph 节点 `build_prompt`：调用 `build_messages()` 组装给 LLM 的 `messages`  
-   - 输入：`message / npc_id / scene_info / short_term_history / long_term_npc_chunks / long_term_world_chunks`  
+   - 输入：`message / npc_id / scene_info / short_term_history / world_chunks / persona_chunks / dialogue_chunks`  
    - 输出：`state.messages`
 7. LangGraph 节点 `prepare_tools`：构建本轮可用 tools schema（包含 `npc_action`、本地 `resolve_location_coordinates`、以及通过 MCP 动态发现的工具）。  
    - 重要：`get_npc_runtime_state` **只允许通过 MCP 调用**（不会回退到本地共享函数）。
@@ -254,7 +279,7 @@ python run.py
    - `tools`：执行工具并把结果以 `role=tool` 追加回 `state.messages`；同时对工具返回值附带“结果解释模板”（`RAW_RESULT_JSON` + `RESULT_EXPLANATION_TEMPLATE`），降低模型误读工具返回值的概率  
    - 当模型产生 `npc_action` tool_call 时：解析为 `state.action: ActionResponse` 并结束循环  
    - 防死循环：由 LangGraph 的 `recursion_limit` 控制最大回合数（而不是在 `llm.py` 写死 4 次）
-9. LangGraph 节点 `store_memory`：当 `use_consolidation=true` 时调用 `LongTermMemory.add_documents()` 把本轮交互写回 ChromaDB。  
+9. LangGraph 节点 `store_memory`：当 `use_consolidation=true` 时调用 `LongTermMemory.add_dialogue()` 把本轮交互写回 ChromaDB（`memory_type=dialogue`）。  
    - 输出：ChromaDB 落盘（`state.action` 不变）
 10. LangGraph 节点 `update_short_term`：写入短期记忆（先 user 再 assistant），用于下一轮 prompt。
 11. 返回 `ActionResponse` 的 JSON 给游戏客户端，游戏引擎据此执行对话/动作表现。
@@ -313,14 +338,15 @@ python run.py
    - 输入：上面的 JSON
    - 调用：`agent_graph.invoke(state=..., recursion_limit=20)`
 2. LangGraph 依次跑节点：
-   - `retrieve`：`LongTermMemory.search()`  
+   - `retrieve`：`LongTermMemory.search_world/search_persona/search_dialogue()`  
      - 输出：
-       - `state.long_term_npc_chunks: list[str]`（NPC 专属：仅检索 kbase/交互记忆）
-       - `state.long_term_world_chunks: list[str]`（全局世界观：在 kbase+lore 中取 lore 增量）
+       - `state.world_chunks: list[str]`（全局世界观）
+       - `state.persona_chunks: list[str]`（当前 NPC 角色设定）
+       - `state.dialogue_chunks: list[str]`（当前 NPC 与玩家历史）
    - `get_short_term_history`：`ShortTermMemory.get_recent()`  
      - 输出：`state.short_term_history: list[{"role","content"}]`
    - `build_prompt`：`build_messages(...)`  
-     - 输入：`state.short_term_history / state.long_term_npc_chunks / state.long_term_world_chunks / state.message...`
+     - 输入：`state.short_term_history / state.world_chunks / state.persona_chunks / state.dialogue_chunks / state.message...`
      - 输出：`state.messages`
    - `prepare_tools`：`build_tooling()`  
      - 输出：`state.tool_defs`（包含本地工具 schema + MCP 动态工具 schema）
@@ -340,7 +366,7 @@ python run.py
 4. 条件路由决定下一步：
    - 由于已存在 `state.action`，路由进入 `store_memory` 并结束循环
 5. `store_memory`（可选）：
-   - 行为：`LongTermMemory.add_documents()` 写回 ChromaDB（当 `use_consolidation=true`）
+   - 行为：`LongTermMemory.add_dialogue()` 写回 ChromaDB（当 `use_consolidation=true`）
 6. `update_short_term`：
    - 写入短期记忆：先 user 再 assistant
 
