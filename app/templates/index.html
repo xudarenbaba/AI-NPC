@@ -26,6 +26,14 @@
         border: 1px solid #ddd;
         border-radius: 6px;
       }
+      select {
+        width: 344px;
+        max-width: 100%;
+        padding: 8px 10px;
+        border: 1px solid #ddd;
+        border-radius: 6px;
+        background: #fff;
+      }
       textarea {
         width: 640px;
         max-width: 100%;
@@ -70,7 +78,12 @@
 
     <div class="row">
       <label for="npcId">npc_id</label>
-      <input id="npcId" type="text" value="npc_1" />
+      <select id="npcId"></select>
+    </div>
+
+    <div class="row">
+      <label for="npcName">npc名字</label>
+      <select id="npcName"></select>
     </div>
 
     <div class="row">
@@ -97,6 +110,43 @@
 
     <script>
       const $ = (id) => document.getElementById(id);
+      const NPC_OPTIONS = [
+        { id: "npc_guard_001", name: "城门守卫", job: "守卫" },
+        { id: "npc_merchant_001", name: "行商", job: "商人" },
+        { id: "npc_tavern_keeper_001", name: "酒馆掌柜", job: "酒馆掌柜" },
+        { id: "npc_alchemist_001", name: "药师", job: "药师" },
+        { id: "npc_scout_001", name: "巡山斥候", job: "巡山斥候" }
+      ];
+
+      function initNpcSelects() {
+        const npcIdEl = $("npcId");
+        const npcNameEl = $("npcName");
+
+        for (const npc of NPC_OPTIONS) {
+          const idOpt = document.createElement("option");
+          idOpt.value = npc.id;
+          idOpt.textContent = `${npc.id}（${npc.job}）`;
+          npcIdEl.appendChild(idOpt);
+
+          const nameOpt = document.createElement("option");
+          nameOpt.value = npc.id;
+          nameOpt.textContent = `${npc.name}（${npc.id}）`;
+          npcNameEl.appendChild(nameOpt);
+        }
+
+        // 默认选中第一个
+        npcIdEl.value = NPC_OPTIONS[0].id;
+        npcNameEl.value = NPC_OPTIONS[0].id;
+
+        // 双向绑定：改 id 同步 name
+        npcIdEl.addEventListener("change", () => {
+          npcNameEl.value = npcIdEl.value;
+        });
+        // 双向绑定：改 name 同步 id
+        npcNameEl.addEventListener("change", () => {
+          npcIdEl.value = npcNameEl.value;
+        });
+      }
 
       async function sendChat() {
         const payload = {
@@ -127,6 +177,7 @@
         $("result").textContent = JSON.stringify(data, null, 2);
       }
 
+      initNpcSelects();
       $("sendBtn").addEventListener("click", sendChat);
     </script>
   </body>
