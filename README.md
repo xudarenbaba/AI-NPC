@@ -98,25 +98,6 @@ python run.py
 | npc_id     | string | 是   | 当前对话的 NPC 标识 |
 
 
-**示例**
-
-```json
-{
-  "player_id": "player_001",
-  "message": "你好，今天天气怎么样？",
-  "scene_info": { "location": "村口", "time": "早晨" }
-}
-```
-
-**响应 (200)**
-
-```json
-{
-  "action_type": "dialogue",
-  "dialogue": "早上好，今天天气不错，适合出门走走。",
-  "emotion": "friendly"
-}
-```
 
 **动作字段说明**
 
@@ -306,9 +287,9 @@ python run.py
 ```json
 {
   "player_id": "player_001",
-  "message": "你好，今天天气怎么样？",
+  "message": "你好，你叫什么名字？",
   "scene_info": { "location": "村口", "time": "早晨" },
-  "npc_id": "npc_merchant_001"
+  "npc_id": "npc_guard_001"
 }
 ```
 
@@ -321,10 +302,17 @@ python run.py
 ```json
 {
   "action_type": "dialogue",
-  "dialogue": "早上好，今天天气不错，适合出门走走。",
-  "emotion": "friendly",
-  "target_id": null,
-  "extra": null
+  "dialogue": "我是城门守卫罗恩。请出示你的通行证或说明来意。",
+  "emotion": "严肃",
+  "extra": {
+    "job": "守卫",
+    "location": {
+      "x": 5,
+      "y": 5,
+      "z": 0
+    },
+    "task": "看守城门"
+  }
 }
 ```
 
@@ -396,22 +384,23 @@ python run.py
 ```json
 {
   "action_type": "dialogue",
-  "dialogue": "我是村里的药师，正在炼制止血散和祛瘴丹。我的位置在坐标(33, 24, 0)。我能和你对话，使用药草，或者休息。酒馆在坐标(27, 30, 340)，那里是情报汇集点，你可以找掌柜打听消息。",
+  "dialogue": "我是马修，一名行商。我当前的坐标是(42, 18, 0)，职业是商人，正在执行售卖补给的任务。我可以和你对话、移动位置、使用物品或者待机。至于酒馆的具体位置，它在坐标(27, 30, 340)处。",
   "emotion": "友好",
   "extra": {
     "my_available_actions": [
       "dialogue",
+      "move",
       "use_item",
       "idle"
     ],
-    "my_job": "药师",
+    "my_job": "商人",
     "my_location": {
-      "x": 33,
-      "y": 24,
+      "x": 42,
+      "y": 18,
       "z": 0
     },
-    "my_task": "炼制止血散与祛瘴丹",
-    "tavern_coordinates": {
+    "my_task": "售卖补给",
+    "tavern_location": {
       "x": 27,
       "y": 30,
       "z": 340
