@@ -25,8 +25,8 @@ python run.py
 - 该子项目用于快速验证“玩家输入 -> `/chat` -> NPC 对话/动作反馈”的最小闭环。
 - 详细说明（运行步骤、交互方式、已知限制）请查看：`AI-NPC-demo-pygame/README.md`。
 
-模拟游戏界面-2
-模拟游戏界面-3
+![模拟游戏界面-2](images/img2.png)
+![模拟游戏界面-3](images/img3.png)
 
 最简联调流程：
 
@@ -55,7 +55,7 @@ python run.py
 - **推理**：把召回片段拼入 system/user prompt，要求模型通过 `npc_action` 工具输出结构化动作。
 - **写回沉淀**：根据 `use_consolidation` 配置，把本轮交互写回 ChromaDB（供后续 RAG 检索）。
 
-langgraph结构图
+![langgraph结构图](images/img0.png)
 
 ## 记忆系统设计
 
@@ -83,7 +83,7 @@ langgraph结构图
 
 > 该项目对外提供的是 HTTP API。本地有一个测试的web页面。
 
-主项目接口示意
+![主项目接口示意](images/img1.png)
 
 ### POST /chat
 
