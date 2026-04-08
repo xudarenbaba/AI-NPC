@@ -22,6 +22,11 @@ class Settings:
     input_placeholder: str = "在此输入要说的话…"
     # 聊天模式下启用 SDL 文本输入（TEXTINPUT/TEXTEDITING），用于稳定支持中文 IME。
     use_sdl_text_input: bool = True
+    obs_enabled: bool = True
+    obs_event_limit: int = 12
+    obs_sample_limit: int = 120
+    obs_export_dir: str = "logs"
+    obs_redact_message_len: int = 80
 
 
 SETTINGS = Settings()

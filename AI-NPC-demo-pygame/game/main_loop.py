@@ -5,6 +5,7 @@ import pygame
 from config import SETTINGS
 from game.ai_client import AiClient
 from game.models import NPC
+from game.observability import ObservationStore, build_snapshot, export_samples
 from game.window_focus import try_focus_game_window
 from game.ui import UI
 from game.world import World
@@ -82,6 +83,7 @@ def run_game() -> None:
     chat_transcript: list[tuple[str, str]] = []
     transcript_scroll = [0]
     snap_transcript_bottom = [True]
+    obs = ObservationStore()
 
     def enter_chat(npc: NPC) -> None:
         nonlocal chat_mode, chat_target, input_buffer, ime_pending, ime_composition
@@ -131,6 +133,8 @@ def run_game() -> None:
             chat_transcript=chat_transcript,
             transcript_scroll=transcript_scroll,
             snap_transcript_bottom=snap_transcript_bottom,
+            observation_latest=obs.latest.__dict__ if SETTINGS.obs_enabled else None,
+            observation_events=obs.events if SETTINGS.obs_enabled else [],
         )
         pygame.display.flip()
 
@@ -159,6 +163,13 @@ def run_game() -> None:
                         exit_chat()
                     else:
                         running = False
+                elif event.key == pygame.K_F6 and SETTINGS.obs_enabled:
+                    if obs.samples:
+                        path = export_samples(obs.samples)
+                        stats["status"] = f"已导出: {path}"
+                        obs.push_event(f"EXPORT {len(obs.samples)} -> {path}")
+                    else:
+                        stats["status"] = "无可导出的观测样本"
                 elif chat_mode and chat_target is not None:
                     if event.key == pygame.K_RETURN or event.key == pygame.K_KP_ENTER:
                         if request_pending:
@@ -177,6 +188,8 @@ def run_game() -> None:
                             continue
 
                         chat_transcript.append(("player", msg))
+                        if SETTINGS.obs_enabled:
+                            obs.push_event(f"SEND {chat_target.npc_id}: {msg[:36]}")
                         input_buffer = ""
                         snap_transcript_bottom[0] = True
                         draw_frame(now)
@@ -196,6 +209,10 @@ def run_game() -> None:
                         else:
                             stats["error_count"] = int(stats["error_count"]) + 1
                             stats["status"] = f"异常: {result.error_message}"
+                        if SETTINGS.obs_enabled:
+                            obs.push_event(
+                                f"RECV {result.action.action_type} ok={int(result.ok)} {result.latency_ms}ms"
+                            )
 
                         reply = (result.action.dialogue or "").strip()
                         if not reply:
@@ -211,6 +228,37 @@ def run_game() -> None:
                         if result.action.action_type == "idle" and result.action.dialogue.strip():
                             chat_target.dialogue_text = result.action.dialogue
                             chat_target.dialogue_until = now + SETTINGS.bubble_duration_seconds
+                        if SETTINGS.obs_enabled:
+                            obs.push_event(f"APPLY {action_result} state={chat_target.runtime_state}")
+                            obs.latest = build_snapshot(
+                                chat_target,
+                                msg,
+                                result.action,
+                                result.latency_ms,
+                                result.ok,
+                                result.error_message,
+                                action_result,
+                            )
+                            obs.push_sample(
+                                {
+                                    "timestamp": int(now * 1000),
+                                    "request": result.request_payload or {},
+                                    "response": result.response_payload or {
+                                        "action_type": result.action.action_type,
+                                        "dialogue": result.action.dialogue,
+                                        "emotion": result.action.emotion,
+                                        "target_id": result.action.target_id,
+                                        "extra": result.action.extra,
+                                    },
+                                    "result": {
+                                        "ok": result.ok,
+                                        "latency_ms": result.latency_ms,
+                                        "error_message": result.error_message,
+                                        "action_result": action_result,
+                                        "runtime_state": chat_target.runtime_state,
+                                    },
+                                }
+                            )
                         ime_composition = ""
 
                     elif event.key == pygame.K_BACKSPACE and not request_pending:

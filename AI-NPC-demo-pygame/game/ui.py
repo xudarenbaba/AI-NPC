@@ -125,6 +125,8 @@ class UI:
         chat_transcript: list[tuple[str, str]],
         transcript_scroll: list[int],
         snap_transcript_bottom: list[bool],
+        observation_latest: dict[str, str | int | bool] | None,
+        observation_events: list[str],
     ) -> None:
         screen.fill(BACKGROUND_COLOR)
         self._draw_scene_zones(screen)
@@ -151,7 +153,7 @@ class UI:
         if not chat_mode:
             self._draw_hint(screen, nearest_npc, nearest_dist)
         self._draw_overlay(screen, nearest_dist, stats)
-        self._draw_side_panel(screen, world, nearest_npc)
+        self._draw_side_panel(screen, world, nearest_npc, observation_latest, observation_events)
         self._draw_bottom_bar(screen)
         if chat_mode:
             self._draw_chat_dialog(
@@ -192,7 +194,14 @@ class UI:
         screen.blit(title, (14, 8))
         screen.blit(meta, (230, 15))
 
-    def _draw_side_panel(self, screen: pygame.Surface, world: World, nearest_npc: NPC | None) -> None:
+    def _draw_side_panel(
+        self,
+        screen: pygame.Surface,
+        world: World,
+        nearest_npc: NPC | None,
+        observation_latest: dict[str, str | int | bool] | None,
+        observation_events: list[str],
+    ) -> None:
         width, height = screen.get_size()
         panel = pygame.Rect(width - 250, 54, 236, height - 112)
         pygame.draw.rect(screen, SIDE_PANEL_BG, panel, border_radius=12)
@@ -201,10 +210,11 @@ class UI:
         header = self.font.render("角色信息", True, (230, 220, 180))
         screen.blit(header, (panel.x + 12, panel.y + 10))
         y = panel.y + 44
-        gap = 8
+        gap = 6
         count = max(1, len(world.npcs))
-        usable_h = panel.height - 56
-        card_h = max(66, min(90, (usable_h - (count - 1) * gap) // count))
+        upper_h = int(panel.height * 0.50)
+        usable_h = upper_h - 56
+        card_h = max(50, min(72, (usable_h - (count - 1) * gap) // count))
         for npc in world.npcs:
             card = pygame.Rect(panel.x + 10, y, panel.w - 20, card_h)
             active = npc is nearest_npc
@@ -217,9 +227,51 @@ class UI:
             task_text = npc.task if len(npc.task) <= 12 else npc.task[:12] + "…"
             n3 = self.small_font.render(task_text, True, (150, 165, 180))
             screen.blit(n1, (card.x + 10, card.y + 8))
-            screen.blit(n2, (card.x + 10, card.y + 30))
-            screen.blit(n3, (card.x + 10, card.y + 50))
+            screen.blit(n2, (card.x + 10, card.y + 26))
+            screen.blit(n3, (card.x + 10, card.y + 42))
             y += card_h + gap
+
+        obs_top = panel.y + upper_h + 8
+        obs_rect = pygame.Rect(panel.x + 8, obs_top, panel.w - 16, panel.bottom - obs_top - 8)
+        pygame.draw.rect(screen, (33, 38, 48), obs_rect, border_radius=8)
+        pygame.draw.rect(screen, (82, 90, 104), obs_rect, width=1, border_radius=8)
+        obs_title = self.small_font.render("调试观测 (F6导出)", True, (226, 210, 164))
+        screen.blit(obs_title, (obs_rect.x + 8, obs_rect.y + 6))
+
+        ly = obs_rect.y + 28
+        if observation_latest:
+            fields = [
+                f"NPC: {observation_latest.get('npc_id', '')}",
+                f"Action: {observation_latest.get('action_type', '')}",
+                f"Latency: {observation_latest.get('latency_ms', 0)}ms",
+                f"OK: {observation_latest.get('ok', True)}",
+                f"Apply: {observation_latest.get('action_result', '')}",
+            ]
+            msg_text = str(observation_latest.get("message", ""))
+            fields.append(f"Msg: {msg_text}")
+            for line in fields:
+                for wrapped in _wrap_text_to_width(self.small_font, line, obs_rect.w - 14)[:2]:
+                    s = self.small_font.render(wrapped, True, (198, 206, 218))
+                    screen.blit(s, (obs_rect.x + 7, ly))
+                    ly += 16
+        else:
+            s = self.small_font.render("暂无观测数据", True, (155, 165, 180))
+            screen.blit(s, (obs_rect.x + 7, ly))
+            ly += 18
+
+        ly += 4
+        t = self.small_font.render("Timeline:", True, (212, 220, 232))
+        screen.blit(t, (obs_rect.x + 7, ly))
+        ly += 16
+        for ev in observation_events[-6:]:
+            for wrapped in _wrap_text_to_width(self.small_font, ev, obs_rect.w - 14)[:2]:
+                s = self.small_font.render(wrapped, True, (165, 178, 194))
+                screen.blit(s, (obs_rect.x + 7, ly))
+                ly += 15
+                if ly > obs_rect.bottom - 14:
+                    break
+            if ly > obs_rect.bottom - 14:
+                break
 
     def _draw_bottom_bar(self, screen: pygame.Surface) -> None:
         width, height = screen.get_size()

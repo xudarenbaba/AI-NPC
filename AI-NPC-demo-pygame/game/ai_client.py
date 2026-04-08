@@ -17,6 +17,8 @@ class AiClientResult:
     ok: bool
     latency_ms: int
     error_message: str = ""
+    request_payload: dict[str, Any] | None = None
+    response_payload: dict[str, Any] | None = None
 
 
 class AiClient:
@@ -68,6 +70,8 @@ class AiClient:
                     ok=False,
                     latency_ms=latency_ms,
                     error_message="invalid action_type",
+                    request_payload=payload,
+                    response_payload=data if isinstance(data, dict) else None,
                 )
 
             action = AiAction(
@@ -77,7 +81,13 @@ class AiClient:
                 target_id=data.get("target_id"),
                 extra=data.get("extra") if isinstance(data.get("extra"), dict) else {},
             )
-            return AiClientResult(action=action, ok=True, latency_ms=latency_ms)
+            return AiClientResult(
+                action=action,
+                ok=True,
+                latency_ms=latency_ms,
+                request_payload=payload,
+                response_payload=data if isinstance(data, dict) else None,
+            )
         except requests.Timeout:
             latency_ms = int((time.perf_counter() - start) * 1000)
             return AiClientResult(
@@ -85,6 +95,7 @@ class AiClient:
                 ok=False,
                 latency_ms=latency_ms,
                 error_message="timeout",
+                request_payload=payload,
             )
         except requests.RequestException as exc:
             latency_ms = int((time.perf_counter() - start) * 1000)
@@ -93,6 +104,7 @@ class AiClient:
                 ok=False,
                 latency_ms=latency_ms,
                 error_message=str(exc),
+                request_payload=payload,
             )
         except ValueError:
             latency_ms = int((time.perf_counter() - start) * 1000)
@@ -101,4 +113,5 @@ class AiClient:
                 ok=False,
                 latency_ms=latency_ms,
                 error_message="invalid json",
+                request_payload=payload,
             )
