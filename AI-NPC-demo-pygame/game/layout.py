@@ -23,7 +23,7 @@ class ZoneLayout:
 
 
 ZONES: tuple[ZoneLayout, ...] = (
-    ZoneLayout("gate", "村口", (44, 58, 68), 0.02, 0.02, 0.26, 0.25),
+    ZoneLayout("gate", "村口", (44, 58, 68), 0.02, 0.14, 0.26, 0.25),
     ZoneLayout("shop", "商铺", (54, 64, 52), 0.70, 0.03, 0.27, 0.22),
     ZoneLayout("square", "广场", (52, 56, 72), 0.34, 0.33, 0.34, 0.33),
     ZoneLayout("tavern", "酒馆", (66, 52, 44), 0.63, 0.72, 0.33, 0.24),
