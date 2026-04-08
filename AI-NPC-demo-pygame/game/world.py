@@ -4,6 +4,7 @@ from dataclasses import dataclass
 import pygame
 
 from config import SETTINGS
+from game.layout import npc_spawn_pos
 from game.models import AiAction, NPC, Player
 from game.npc_profiles import NPC_PROFILES
 
@@ -24,6 +25,9 @@ class World:
         )
         npcs: list[NPC] = []
         for p in NPC_PROFILES:
+            spawn = npc_spawn_pos(p.npc_id, SETTINGS.window_width, SETTINGS.window_height)
+            if spawn is None:
+                spawn = pygame.Vector2(p.screen_x, p.screen_y)
             npcs.append(
                 NPC(
                     npc_id=p.npc_id,
@@ -32,7 +36,7 @@ class World:
                     task=p.task,
                     available_actions=p.available_actions,
                     world_location=dict(p.world_location),
-                    pos=pygame.Vector2(p.screen_x, p.screen_y),
+                    pos=spawn,
                     speed=SETTINGS.npc_speed,
                 )
             )

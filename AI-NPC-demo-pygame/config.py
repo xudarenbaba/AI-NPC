@@ -3,8 +3,8 @@ from dataclasses import dataclass
 
 @dataclass(frozen=True)
 class Settings:
-    window_width: int = 960
-    window_height: int = 540
+    window_width: int = 1280
+    window_height: int = 720
     fps: int = 60
     player_speed: float = 180.0
     npc_speed: float = 90.0
@@ -20,8 +20,8 @@ class Settings:
     player_id: str = "player_001"
     input_max_chars: int = 500
     input_placeholder: str = "在此输入要说的话…"
-    # Windows 上 True 时 SDL 可能独占键盘、看不到游戏内输入框；默认 False，用按键 unicode + 粘贴输入中文。
-    use_sdl_text_input: bool = False
+    # 聊天模式下启用 SDL 文本输入（TEXTINPUT/TEXTEDITING），用于稳定支持中文 IME。
+    use_sdl_text_input: bool = True
 
 
 SETTINGS = Settings()

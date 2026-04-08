@@ -27,6 +27,22 @@ def _append_input(buffer: str, text: str) -> str:
     return buffer + text[:room]
 
 
+def _clipboard_text() -> str:
+    try:
+        raw = pygame.scrap.get(pygame.SCRAP_TEXT)
+    except Exception:
+        return ""
+    if not raw:
+        return ""
+    if isinstance(raw, bytes):
+        text = raw.decode("utf-8", errors="ignore")
+    else:
+        text = str(raw)
+    text = text.replace("\x00", "").replace("\r\n", "\n").replace("\r", "\n")
+    text = " ".join(part for part in text.split("\n") if part)
+    return text
+
+
 def _is_effectively_empty_message(s: str) -> bool:
     """去掉空白与常见零宽字符，避免「看不见的内容」误触发发送。"""
     if not s:
@@ -44,6 +60,10 @@ def run_game() -> None:
 
     screen = pygame.display.set_mode((SETTINGS.window_width, SETTINGS.window_height))
     pygame.display.set_caption("AI NPC · Pygame 演示（对接 /chat）")
+    try:
+        pygame.scrap.init()
+    except Exception:
+        pass
     clock = pygame.time.Clock()
 
     world = World.create_default()
@@ -58,15 +78,17 @@ def run_game() -> None:
     input_buffer = ""
     request_pending = False
     ime_pending = False
+    ime_composition = ""
     chat_transcript: list[tuple[str, str]] = []
     transcript_scroll = [0]
     snap_transcript_bottom = [True]
 
     def enter_chat(npc: NPC) -> None:
-        nonlocal chat_mode, chat_target, input_buffer, ime_pending
+        nonlocal chat_mode, chat_target, input_buffer, ime_pending, ime_composition
         chat_mode = True
         chat_target = npc
         input_buffer = ""
+        ime_composition = ""
         chat_transcript.clear()
         transcript_scroll[0] = 0
         snap_transcript_bottom[0] = True
@@ -79,12 +101,13 @@ def run_game() -> None:
             pass
 
     def exit_chat() -> None:
-        nonlocal chat_mode, chat_target, input_buffer, request_pending, ime_pending
+        nonlocal chat_mode, chat_target, input_buffer, request_pending, ime_pending, ime_composition
         chat_mode = False
         chat_target = None
         input_buffer = ""
         request_pending = False
         ime_pending = False
+        ime_composition = ""
         chat_transcript.clear()
         transcript_scroll[0] = 0
         if SETTINGS.use_sdl_text_input:
@@ -102,6 +125,8 @@ def run_game() -> None:
             chat_mode=chat_mode,
             chat_target=chat_target,
             input_buffer=input_buffer,
+            ime_composition=ime_composition,
+            input_focused=bool(pygame.key.get_focused()),
             request_pending=request_pending,
             chat_transcript=chat_transcript,
             transcript_scroll=transcript_scroll,
@@ -186,9 +211,18 @@ def run_game() -> None:
                         if result.action.action_type == "idle" and result.action.dialogue.strip():
                             chat_target.dialogue_text = result.action.dialogue
                             chat_target.dialogue_until = now + SETTINGS.bubble_duration_seconds
+                        ime_composition = ""
 
                     elif event.key == pygame.K_BACKSPACE and not request_pending:
                         input_buffer = input_buffer[:-1]
+                    elif (
+                        not request_pending
+                        and (event.mod & pygame.KMOD_CTRL)
+                        and event.key == pygame.K_v
+                    ):
+                        pasted = _clipboard_text()
+                        if pasted:
+                            input_buffer = _append_input(input_buffer, pasted)
                     elif (
                         not SETTINGS.use_sdl_text_input
                         and not request_pending
@@ -210,12 +244,19 @@ def run_game() -> None:
             elif event.type == pygame.TEXTINPUT and chat_mode and not request_pending:
                 if SETTINGS.use_sdl_text_input and event.text:
                     input_buffer = _append_input(input_buffer, event.text)
+                    ime_composition = ""
+            elif event.type == pygame.TEXTEDITING and chat_mode and not request_pending:
+                if SETTINGS.use_sdl_text_input:
+                    ime_composition = event.text or ""
 
         if chat_mode and SETTINGS.use_sdl_text_input:
             try:
                 pygame.key.set_text_input_rect(ui.layout_chat_panel(screen))
             except Exception:
                 pass
+
+        if chat_mode:
+            ime_composition = ime_composition if pygame.key.get_focused() else ""
 
         keys = pygame.key.get_pressed()
         move = pygame.Vector2(0, 0)
