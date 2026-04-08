@@ -27,6 +27,7 @@ python run.py
 
 ![模拟游戏界面-2](images/img2.png)
 ![模拟游戏界面-3](images/img3.png)
+![模拟游戏界面-4](images/img4.png)
 
 最简联调流程：
 

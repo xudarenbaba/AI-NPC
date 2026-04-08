@@ -84,6 +84,11 @@ def run_game() -> None:
     transcript_scroll = [0]
     snap_transcript_bottom = [True]
     obs = ObservationStore()
+    debug_drawer_open = False
+    debug_drawer_widths = [0.34, 0.42, 0.5]
+    debug_drawer_width_idx = 1
+    debug_drawer_scroll = 0
+    debug_drawer_max_scroll = 0
 
     def enter_chat(npc: NPC) -> None:
         nonlocal chat_mode, chat_target, input_buffer, ime_pending, ime_composition
@@ -119,7 +124,9 @@ def run_game() -> None:
                 pass
 
     def draw_frame(now: float) -> None:
-        ui.draw(
+        nonlocal debug_drawer_max_scroll, debug_drawer_scroll
+        width_ratio = debug_drawer_widths[debug_drawer_width_idx]
+        debug_drawer_max_scroll = ui.draw(
             screen,
             world,
             now,
@@ -135,7 +142,11 @@ def run_game() -> None:
             snap_transcript_bottom=snap_transcript_bottom,
             observation_latest=obs.latest.__dict__ if SETTINGS.obs_enabled else None,
             observation_events=obs.events if SETTINGS.obs_enabled else [],
+            debug_drawer_open=SETTINGS.obs_enabled and debug_drawer_open,
+            debug_drawer_width_ratio=width_ratio,
+            debug_drawer_scroll=debug_drawer_scroll,
         )
+        debug_drawer_scroll = max(0, min(debug_drawer_scroll, debug_drawer_max_scroll))
         pygame.display.flip()
 
     while running:
@@ -157,6 +168,12 @@ def run_game() -> None:
             elif event.type == pygame.MOUSEWHEEL and chat_mode:
                 transcript_scroll[0] += int(event.y) * 28
                 snap_transcript_bottom[0] = False
+            elif event.type == pygame.MOUSEWHEEL and SETTINGS.obs_enabled and debug_drawer_open:
+                mx, my = pygame.mouse.get_pos()
+                drawer_rect = ui.debug_drawer_rect(screen, debug_drawer_widths[debug_drawer_width_idx])
+                if drawer_rect.collidepoint(mx, my):
+                    debug_drawer_scroll -= int(event.y) * 28
+                    debug_drawer_scroll = max(0, min(debug_drawer_scroll, debug_drawer_max_scroll))
             elif event.type == pygame.KEYDOWN:
                 if event.key == pygame.K_ESCAPE:
                     if chat_mode:
@@ -289,6 +306,10 @@ def run_game() -> None:
                     )
                     if can_open and nearest_npc is not None:
                         enter_chat(nearest_npc)
+                elif event.key == pygame.K_F3 and SETTINGS.obs_enabled:
+                    debug_drawer_open = not debug_drawer_open
+                elif event.key == pygame.K_F4 and SETTINGS.obs_enabled:
+                    debug_drawer_width_idx = (debug_drawer_width_idx + 1) % len(debug_drawer_widths)
             elif event.type == pygame.TEXTINPUT and chat_mode and not request_pending:
                 if SETTINGS.use_sdl_text_input and event.text:
                     input_buffer = _append_input(input_buffer, event.text)
