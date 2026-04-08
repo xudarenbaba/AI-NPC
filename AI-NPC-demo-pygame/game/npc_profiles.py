@@ -26,7 +26,7 @@ class NpcProfile:
 # - 罗恩/凯：村口与外沿
 # - 马修：商铺
 # - 艾琳娜：酒馆
-# - 赛琳：工坊（铁匠铺附近）
+# - 赛琳：广场
 NPC_PROFILES: tuple[NpcProfile, ...] = (
     NpcProfile(
         npc_id="npc_guard_001",
@@ -64,7 +64,7 @@ NPC_PROFILES: tuple[NpcProfile, ...] = (
         job="药师",
         task="炼制止血散与祛瘴丹",
         available_actions=("dialogue", "use_item", "idle"),
-        world_location={"x": 33, "y": 24, "z": 0},
+        world_location={"x": 20, "y": 20, "z": 0},
         screen_x=188.0,
         screen_y=548.0,
     ),

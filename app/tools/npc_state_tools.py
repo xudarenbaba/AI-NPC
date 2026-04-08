@@ -28,7 +28,7 @@ NPC_STATE = {
         "available_actions": ["dialogue", "emote", "idle"],
     },
     "npc_alchemist_001": {
-        "location": {"x": 33, "y": 24, "z": 0},
+        "location": {"x": 20, "y": 20, "z": 0},
         "job": "药师",
         "task": "炼制止血散与祛瘴丹",
         "available_actions": ["dialogue", "use_item", "idle"],

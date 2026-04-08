@@ -36,7 +36,7 @@ NPC_ANCHORS: dict[str, tuple[str, float, float]] = {
     "npc_scout_001": ("gate", 0.78, 0.68),
     "npc_merchant_001": ("shop", 0.58, 0.55),
     "npc_tavern_keeper_001": ("tavern", 0.55, 0.58),
-    "npc_alchemist_001": ("forge", 0.68, 0.52),
+    "npc_alchemist_001": ("square", 0.30, 0.52),
 }
 
 
