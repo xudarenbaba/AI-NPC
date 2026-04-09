@@ -1,27 +1,62 @@
 """知识图谱检索与事实格式化。"""
 from __future__ import annotations
 
+import json
 import logging
-import re
 from typing import Any
 
 from app.config import load_config
-from app.knowledge_graph.client import fetch_neighbors, fetch_seed_entities
+from app.knowledge_graph.client import fetch_neighbors, fetch_seed_entities_by_specs
+from app.knowledge_graph.schema import ALLOWED_LABELS, ALLOWED_RELATIONS, normalize_name
+from app.reasoning.llm import call_llm
 
 logger = logging.getLogger(__name__)
 
 
-def _split_tokens(text: str) -> list[str]:
-    # 提取中英文/数字词元，过滤太短 token
-    raw = re.findall(r"[A-Za-z0-9_]+|[\u4e00-\u9fff]{2,}", text or "")
-    out: list[str] = []
-    for t in raw:
-        token = t.strip()
-        if len(token) < 2:
+def _parse_query_with_llm(*, message: str, npc_id: str | None, request_id: str | None) -> tuple[list[dict[str, str]], list[str]]:
+    system_prompt = (
+        "你是知识图谱查询解析器。"
+        "你必须只返回 JSON，不允许输出额外文本。\n"
+        "JSON 格式："
+        '{"entities":[{"name":"...","label":"Character|Location|Organization|Item|Quest|Event|Concept"}],'
+        '"relations":["LOCATED_IN|AFFILIATED_WITH|HAS_ROLE|HAS_TASK|CAN_DO|KNOWS|HOSTILE_TO|TRADES_WITH|REQUIRES|PARTICIPATES_IN"]}\n'
+        "要求：\n"
+        "1) entities 只保留和问题强相关的实体，最多 6 个。\n"
+        "2) label 必须使用枚举值。\n"
+        "3) relations 可为空数组。"
+    )
+    user_prompt = (
+        f"npc_id={npc_id or ''}\n"
+        f"user_message={message}\n"
+        "请输出 JSON。"
+    )
+    content = call_llm(
+        [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": user_prompt},
+        ]
+    )
+    try:
+        data = json.loads(content)
+    except Exception as e:
+        raise ValueError(f"parse query json failed: {e}")
+    entities_raw = data.get("entities") or []
+    relations_raw = data.get("relations") or []
+    entities: list[dict[str, str]] = []
+    for x in entities_raw:
+        name = normalize_name(str((x or {}).get("name") or ""))
+        label = str((x or {}).get("label") or "").strip()
+        if not name or label not in ALLOWED_LABELS:
             continue
-        if token not in out:
-            out.append(token)
-    return out
+        entities.append({"name": name, "label": label})
+    relations = [r for r in [str(v).strip() for v in relations_raw] if r in ALLOWED_RELATIONS]
+    logger.info(
+        "KG query parsed by LLM. rid=%s entities=%s relations=%s",
+        request_id,
+        entities,
+        relations,
+    )
+    return entities[:6], relations[:10]
 
 
 def _build_ranked_facts(rows: list[dict[str, Any]], *, max_facts: int) -> list[str]:
@@ -62,28 +97,26 @@ def retrieve_kg_facts(
     max_entities = int(ret_cfg.get("max_entities", 6))
     max_facts = int(ret_cfg.get("max_facts", 8))
     edge_limit = int(ret_cfg.get("edge_limit", 80))
-
-    tokens = _split_tokens(message)
-    if npc_id:
-        tokens.append(npc_id)
-    # 保序去重
-    dedup_tokens: list[str] = []
-    for t in tokens:
-        if t not in dedup_tokens:
-            dedup_tokens.append(t)
-
-    logger.info("KG query tokens. rid=%s tokens=%s", request_id, dedup_tokens)
     try:
-        seeds = fetch_seed_entities(dedup_tokens, limit=max_entities)
+        entity_specs, rel_filters = _parse_query_with_llm(
+            message=message,
+            npc_id=npc_id,
+            request_id=request_id,
+        )
+        if not entity_specs:
+            logger.info("KG query parsed empty entities. rid=%s", request_id)
+            return [], []
+        seeds = fetch_seed_entities_by_specs(entity_specs, limit_per_label=max_entities)
         entity_ids = [str(x.get("id")) for x in seeds if x.get("id")]
-        entity_names = [str(x.get("name")) for x in seeds if x.get("name")]
+        entity_names = [f"{x.get('name')}({x.get('label')})" for x in seeds if x.get("name")]
         logger.info(
             "KG seed entities matched. rid=%s count=%s entities=%s",
             request_id,
             len(entity_ids),
             entity_names,
         )
-        rows = fetch_neighbors(entity_ids, limit=edge_limit)
+        rows = fetch_neighbors(entity_ids, limit=edge_limit, relations=rel_filters)
+        logger.info("KG neighbor edges fetched. rid=%s rows=%s", request_id, len(rows))
         facts = _build_ranked_facts(rows, max_facts=max_facts)
         logger.info("KG facts retrieved. rid=%s count=%s facts=%s", request_id, len(facts), facts)
         return facts, entity_names

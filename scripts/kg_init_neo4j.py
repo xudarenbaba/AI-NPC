@@ -11,13 +11,16 @@ root = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(root))
 
 from app.config import load_config
+from app.knowledge_graph.schema import ALLOWED_LABELS
 
 
-CONSTRAINTS_AND_INDEXES = [
-    "CREATE CONSTRAINT kg_entity_id IF NOT EXISTS FOR (n:Entity) REQUIRE n.id IS UNIQUE",
-    "CREATE INDEX kg_entity_type IF NOT EXISTS FOR (n:Entity) ON (n.type)",
-    "CREATE INDEX kg_entity_name IF NOT EXISTS FOR (n:Entity) ON (n.name)",
-]
+def build_constraints_and_indexes() -> list[str]:
+    qs: list[str] = []
+    for label in sorted(ALLOWED_LABELS):
+        low = label.lower()
+        qs.append(f"CREATE CONSTRAINT kg_{low}_id IF NOT EXISTS FOR (n:{label}) REQUIRE n.id IS UNIQUE")
+        qs.append(f"CREATE INDEX kg_{low}_name IF NOT EXISTS FOR (n:{label}) ON (n.name)")
+    return qs
 
 
 def main() -> None:
@@ -34,7 +37,7 @@ def main() -> None:
 
     driver = GraphDatabase.driver(args.uri, auth=(args.user, args.password))
     with driver.session(database=args.database) as session:
-        for q in CONSTRAINTS_AND_INDEXES:
+        for q in build_constraints_and_indexes():
             session.run(q)
     driver.close()
     print(f"Neo4j 初始化完成: uri={args.uri}, database={args.database}")

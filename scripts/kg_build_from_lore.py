@@ -1,25 +1,38 @@
-"""从 lore 离线构建知识图谱并写入 Neo4j（MVP 规则版）。"""
+"""从 lore 离线构建知识图谱并写入 Neo4j（LLM 抽取版）。"""
+from __future__ import annotations
+
 import argparse
-import hashlib
-import re
+import json
+import logging
 import sys
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from pathlib import Path
+from typing import Any
 
 from neo4j import GraphDatabase
-
 
 root = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(root))
 
 from app.config import load_config
+from app.knowledge_graph.schema import (
+    ALLOWED_LABELS,
+    ALLOWED_RELATIONS,
+    normalize_name,
+    stable_entity_id,
+)
+from app.reasoning.llm import call_llm
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
 class Entity:
     id: str
-    type: str
+    label: str
     name: str
+    aliases: list[str]
     source_file: str
 
 
@@ -33,199 +46,162 @@ class Relation:
     confidence: float
 
 
-def slug(text: str) -> str:
-    """
-    生成可读 slug：
-    - 保留中英文、数字、下划线
-    - 其它符号归一为 "_"
-    - 为空时返回 "entity"
-    """
-    s = text.strip().lower()
-    s = re.sub(r"\s+", "_", s)
-    s = re.sub(r"[^\w\u4e00-\u9fff]+", "_", s, flags=re.UNICODE)
-    s = re.sub(r"_+", "_", s).strip("_")
-    return s or "entity"
-
-
-def entity_id(entity_type: str, name: str) -> str:
-    """
-    生成稳定唯一 ID：
-    <Type>:<readable_slug>:<sha1_12>
-    - slug 用于可读性
-    - hash 用于去歧义与稳定性（避免同名/清洗后冲突）
-    """
-    canonical = name.strip()
-    readable = slug(canonical)
-    digest = hashlib.sha1(canonical.encode("utf-8")).hexdigest()[:12]
-    return f"{entity_type}:{readable}:{digest}"
-
-
-def parse_world(world_path: Path) -> tuple[dict[str, Entity], list[Relation]]:
-    entities: dict[str, Entity] = {}
-    relations: list[Relation] = []
-    source = str(world_path.relative_to(root))
-    text = world_path.read_text(encoding="utf-8")
-
-    # 地点常识：形如 “村口：xxx”
-    for m in re.finditer(r"^([^\n：]{1,20})：([^\n]+)$", text, flags=re.M):
-        name = m.group(1).strip()
-        if len(name) > 12:
+def split_chunks(text: str) -> list[str]:
+    chunks: list[str] = []
+    for part in text.split("\n\n"):
+        p = part.strip()
+        if not p:
             continue
-        if name in {"当前可交互 NPC 设定（对应现有脚本角色）", "可扩展 NPC 设定（供后续添加到 npc_state_tools.py）"}:
-            continue
-        eid = entity_id("Location", name)
-        entities[eid] = Entity(id=eid, type="Location", name=name, source_file=source)
-
-    # 世界观中常见组织
-    for org in ["青石巡卫", "行脚商会"]:
-        if org in text:
-            eid = entity_id("Organization", org)
-            entities[eid] = Entity(id=eid, type="Organization", name=org, source_file=source)
-
-    # 世界观中出现的关键概念
-    for concept in ["北山谷口封印", "妖雾", "镇雾符核", "赤纹铁", "清心草", "下品灵石"]:
-        if concept in text:
-            eid = entity_id("Concept", concept)
-            entities[eid] = Entity(id=eid, type="Concept", name=concept, source_file=source)
-
-    return entities, relations
+        chunks.append(p)
+    return chunks
 
 
-def parse_persona_file(path: Path) -> tuple[dict[str, Entity], list[Relation]]:
-    entities: dict[str, Entity] = {}
-    relations: list[Relation] = []
-    source = str(path.relative_to(root))
-    text = path.read_text(encoding="utf-8")
-
-    npc_id_match = re.search(r"^NPC_ID:\s*([^\n]+)$", text, flags=re.M)
-    npc_id = npc_id_match.group(1).strip() if npc_id_match else path.stem
-
-    # 姓名/称呼：罗恩（城门守卫）
-    display_match = re.search(r"^姓名/称呼：([^\n]+)$", text, flags=re.M)
-    display = display_match.group(1).strip() if display_match else npc_id
-    char_eid = entity_id("Character", npc_id)
-    entities[char_eid] = Entity(id=char_eid, type="Character", name=display, source_file=source)
-
-    # 身份定位：xxx
-    role_match = re.search(r"^身份定位：([^\n]+)$", text, flags=re.M)
-    if role_match:
-        role_name = role_match.group(1).strip()
-        role_eid = entity_id("Role", role_name)
-        entities[role_eid] = Entity(id=role_eid, type="Role", name=role_name, source_file=source)
-        relations.append(
-            Relation(
-                head_id=char_eid,
-                relation="HAS_ROLE",
-                tail_id=role_eid,
-                source_file=source,
-                evidence=role_name,
-                confidence=0.95,
-            )
-        )
-
-    # 当前任务：xxx
-    task_match = re.search(r"^当前任务：([^\n]+)$", text, flags=re.M)
-    if task_match:
-        task_name = task_match.group(1).strip()
-        task_eid = entity_id("Task", task_name)
-        entities[task_eid] = Entity(id=task_eid, type="Task", name=task_name, source_file=source)
-        relations.append(
-            Relation(
-                head_id=char_eid,
-                relation="HAS_TASK",
-                tail_id=task_eid,
-                source_file=source,
-                evidence=task_name,
-                confidence=0.9,
-            )
-        )
-
-    # 与玩家互动偏好：xxx
-    pref_match = re.search(r"^与玩家互动偏好：([^\n]+)$", text, flags=re.M)
-    if pref_match:
-        pref_name = pref_match.group(1).strip()
-        pref_eid = entity_id("Preference", pref_name)
-        entities[pref_eid] = Entity(id=pref_eid, type="Preference", name=pref_name, source_file=source)
-        relations.append(
-            Relation(
-                head_id=char_eid,
-                relation="INTERACTS_WITH_PLAYER_AS",
-                tail_id=pref_eid,
-                source_file=source,
-                evidence=pref_name,
-                confidence=0.85,
-            )
-        )
-
-    # 可执行动作：dialogue, idle, emote
-    actions_match = re.search(r"^可执行动作：([^\n]+)$", text, flags=re.M)
-    if actions_match:
-        actions = [a.strip(" 。,，") for a in re.split(r"[,，]", actions_match.group(1)) if a.strip()]
-        for action in actions:
-            act_eid = entity_id("Action", action)
-            entities[act_eid] = Entity(id=act_eid, type="Action", name=action, source_file=source)
-            relations.append(
-                Relation(
-                    head_id=char_eid,
-                    relation="CAN_DO",
-                    tail_id=act_eid,
-                    source_file=source,
-                    evidence=action,
-                    confidence=0.98,
-                )
-            )
-
-    # 角色到地点（从人设描述里做轻量规则）
-    if "城门守卫" in text or "村口" in text:
-        loc_eid = entity_id("Location", "村口")
-        entities[loc_eid] = Entity(id=loc_eid, type="Location", name="村口", source_file=source)
-        relations.append(
-            Relation(
-                head_id=char_eid,
-                relation="LOCATED_IN",
-                tail_id=loc_eid,
-                source_file=source,
-                evidence="城门守卫/村口",
-                confidence=0.8,
-            )
-        )
-
-    return entities, relations
+def _extract_json(content: str) -> dict[str, Any]:
+    raw = (content or "").strip()
+    if raw.startswith("```"):
+        raw = raw.strip("`")
+        if raw.lower().startswith("json"):
+            raw = raw[4:].strip()
+    return json.loads(raw)
 
 
-def write_graph(uri: str, user: str, password: str, database: str, entities: dict[str, Entity], relations: list[Relation]) -> None:
-    driver = GraphDatabase.driver(uri, auth=(user, password))
-    with driver.session(database=database) as session:
-        # 批量写节点
-        entity_rows = [
-            {
-                "id": e.id,
-                "type": e.type,
-                "name": e.name,
-                "source_file": e.source_file,
-            }
-            for e in entities.values()
+def extract_graph_from_chunk(*, chunk: str, source_file: str) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    system_prompt = (
+        "你是知识图谱抽取器。只输出 JSON，不要输出其它文本。\n"
+        "输出格式："
+        '{"entities":[{"name":"...","label":"Character|Location|Organization|Item|Quest|Event|Concept","aliases":["..."]}],'
+        '"relations":[{"head_name":"...","head_label":"Character|Location|Organization|Item|Quest|Event|Concept",'
+        '"relation":"LOCATED_IN|AFFILIATED_WITH|HAS_ROLE|HAS_TASK|CAN_DO|KNOWS|HOSTILE_TO|TRADES_WITH|REQUIRES|PARTICIPATES_IN",'
+        '"tail_name":"...","tail_label":"Character|Location|Organization|Item|Quest|Event|Concept",'
+        '"confidence":0.0,"evidence":"..."}]}\n'
+        "要求：不要臆造，不确定就不输出。"
+    )
+    user_prompt = f"source_file={source_file}\ntext={chunk}\n请输出 JSON。"
+    content = call_llm(
+        [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": user_prompt},
         ]
-        session.run(
-            """
-            UNWIND $rows AS row
-            MERGE (n:Entity {id: row.id})
-            SET n.type = row.type,
-                n.name = row.name,
-                n.source_file = row.source_file
-            """,
-            rows=entity_rows,
-        )
+    )
+    data = _extract_json(content)
+    entities = data.get("entities") or []
+    relations = data.get("relations") or []
+    return entities, relations
 
-        # 关系逐条写（关系类型动态）
+
+def _normalize_entities(raw_entities: list[dict[str, Any]], source_file: str) -> dict[str, Entity]:
+    out: dict[str, Entity] = {}
+    for e in raw_entities:
+        label = str((e or {}).get("label") or "").strip()
+        name = normalize_name(str((e or {}).get("name") or ""))
+        aliases = [normalize_name(str(x)) for x in ((e or {}).get("aliases") or []) if str(x).strip()]
+        if label not in ALLOWED_LABELS or not name:
+            continue
+        eid = stable_entity_id(label, name)
+        out[eid] = Entity(
+            id=eid,
+            label=label,
+            name=name,
+            aliases=aliases,
+            source_file=source_file,
+        )
+    return out
+
+
+def _normalize_relations(
+    raw_relations: list[dict[str, Any]],
+    entities: dict[str, Entity],
+    source_file: str,
+) -> list[Relation]:
+    out: list[Relation] = []
+    for r in raw_relations:
+        rel = str((r or {}).get("relation") or "").strip()
+        h_name = normalize_name(str((r or {}).get("head_name") or ""))
+        h_label = str((r or {}).get("head_label") or "").strip()
+        t_name = normalize_name(str((r or {}).get("tail_name") or ""))
+        t_label = str((r or {}).get("tail_label") or "").strip()
+        if rel not in ALLOWED_RELATIONS:
+            continue
+        if h_label not in ALLOWED_LABELS or t_label not in ALLOWED_LABELS:
+            continue
+        if not h_name or not t_name:
+            continue
+        head_id = stable_entity_id(h_label, h_name)
+        tail_id = stable_entity_id(t_label, t_name)
+        if head_id not in entities or tail_id not in entities:
+            # 只保留实体也成功入图的关系
+            continue
+        conf = float((r or {}).get("confidence") or 0.0)
+        evidence = normalize_name(str((r or {}).get("evidence") or ""))
+        out.append(
+            Relation(
+                head_id=head_id,
+                relation=rel,
+                tail_id=tail_id,
+                source_file=source_file,
+                evidence=evidence,
+                confidence=max(0.0, min(1.0, conf)),
+            )
+        )
+    return out
+
+
+def write_graph(
+    *,
+    uri: str,
+    user: str,
+    password: str,
+    database: str,
+    entities: dict[str, Entity],
+    relations: list[Relation],
+) -> None:
+    driver = GraphDatabase.driver(uri, auth=(user, password))
+    now = datetime.now(timezone.utc).isoformat()
+    with driver.session(database=database) as session:
+        for e in entities.values():
+            q = f"""
+            MERGE (n:{e.label} {{id: $id}})
+            SET n.name = $name,
+                n.aliases = $aliases,
+                n.source_files = CASE WHEN n.source_files IS NULL THEN [$source_file] ELSE apoc.coll.toSet(n.source_files + [$source_file]) END,
+                n.updated_at = $updated_at
+            """
+            try:
+                session.run(
+                    q,
+                    id=e.id,
+                    name=e.name,
+                    aliases=e.aliases,
+                    source_file=e.source_file,
+                    updated_at=now,
+                )
+            except Exception:
+                # 没有 APOC 的环境使用纯赋值退化
+                q2 = f"""
+                MERGE (n:{e.label} {{id: $id}})
+                SET n.name = $name,
+                    n.aliases = $aliases,
+                    n.source_files = [$source_file],
+                    n.updated_at = $updated_at
+                """
+                session.run(
+                    q2,
+                    id=e.id,
+                    name=e.name,
+                    aliases=e.aliases,
+                    source_file=e.source_file,
+                    updated_at=now,
+                )
+
         for r in relations:
             q = f"""
-            MATCH (h:Entity {{id: $head_id}})
-            MATCH (t:Entity {{id: $tail_id}})
+            MATCH (h {{id: $head_id}})
+            MATCH (t {{id: $tail_id}})
             MERGE (h)-[rel:{r.relation}]->(t)
             SET rel.source_file = $source_file,
                 rel.evidence = $evidence,
-                rel.confidence = $confidence
+                rel.confidence = $confidence,
+                rel.updated_at = $updated_at
             """
             session.run(
                 q,
@@ -234,6 +210,7 @@ def write_graph(uri: str, user: str, password: str, database: str, entities: dic
                 source_file=r.source_file,
                 evidence=r.evidence,
                 confidence=r.confidence,
+                updated_at=now,
             )
     driver.close()
 
@@ -241,7 +218,7 @@ def write_graph(uri: str, user: str, password: str, database: str, entities: dic
 def main() -> None:
     cfg = load_config()
     neo4j_cfg = cfg.get("knowledge_graph", {}).get("neo4j", {})
-    parser = argparse.ArgumentParser(description="从 lore 离线构建知识图谱并写入 Neo4j（MVP）")
+    parser = argparse.ArgumentParser(description="从 lore 离线构建知识图谱并写入 Neo4j（LLM）")
     parser.add_argument("--uri", default=neo4j_cfg.get("uri", "neo4j://127.0.0.1:7687"), help="Neo4j URI")
     parser.add_argument("--user", default=neo4j_cfg.get("user", "neo4j"), help="Neo4j 用户名")
     parser.add_argument("--password", default=neo4j_cfg.get("password", ""), help="Neo4j 密码")
@@ -252,22 +229,41 @@ def main() -> None:
         raise ValueError("Neo4j 密码为空，请在 config.yaml 中设置 knowledge_graph.neo4j.password 或使用 --password")
 
     lore_dir = Path(args.lore_dir)
-    world_path = lore_dir / "world.md"
-    persona_dir = lore_dir / "persona"
-
+    files = sorted(lore_dir.glob("**/*.md"))
     all_entities: dict[str, Entity] = {}
     all_relations: list[Relation] = []
 
-    if world_path.exists():
-        ents, rels = parse_world(world_path)
-        all_entities.update(ents)
-        all_relations.extend(rels)
+    for f in files:
+        rel = str(f.relative_to(root))
+        text = f.read_text(encoding="utf-8")
+        chunks = split_chunks(text)
+        logger.info("KG import file start. file=%s chunks=%s", rel, len(chunks))
+        for idx, chunk in enumerate(chunks):
+            try:
+                raw_entities, raw_relations = extract_graph_from_chunk(chunk=chunk, source_file=rel)
+                chunk_entities = _normalize_entities(raw_entities, rel)
+                # 先并入全局实体，保障关系校验可命中
+                all_entities.update(chunk_entities)
+                chunk_rel = _normalize_relations(raw_relations, all_entities, rel)
+                all_relations.extend(chunk_rel)
+                logger.info(
+                    "KG chunk extracted. file=%s idx=%s entities=%s relations=%s",
+                    rel,
+                    idx,
+                    len(chunk_entities),
+                    len(chunk_rel),
+                )
+            except Exception as e:
+                logger.warning("KG chunk extract failed. file=%s idx=%s detail=%s", rel, idx, e)
 
-    if persona_dir.exists():
-        for pf in sorted(persona_dir.glob("*.md")):
-            ents, rels = parse_persona_file(pf)
-            all_entities.update(ents)
-            all_relations.extend(rels)
+    # 关系去重
+    dedup_rel: dict[tuple[str, str, str], Relation] = {}
+    for r in all_relations:
+        key = (r.head_id, r.relation, r.tail_id)
+        old = dedup_rel.get(key)
+        if old is None or r.confidence > old.confidence:
+            dedup_rel[key] = r
+    final_relations = list(dedup_rel.values())
 
     write_graph(
         uri=args.uri,
@@ -275,10 +271,10 @@ def main() -> None:
         password=args.password,
         database=args.database,
         entities=all_entities,
-        relations=all_relations,
+        relations=final_relations,
     )
     print(
-        f"图谱导入完成：nodes={len(all_entities)} edges={len(all_relations)} "
+        f"图谱导入完成：nodes={len(all_entities)} edges={len(final_relations)} "
         f"uri={args.uri} database={args.database}"
     )
 

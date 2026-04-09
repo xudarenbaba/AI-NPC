@@ -96,15 +96,16 @@ python run.py
 相关脚本：
 
 ```bash
-python scripts/kg_init_neo4j.py      # 初始化约束/索引（通常一次）
-python scripts/kg_build_from_lore.py # 从 lore 构建并导入图谱（可重复执行）
+python scripts/kg_reset_neo4j.py     # 清空当前 Neo4j 数据（重建时使用）
+python scripts/kg_init_neo4j.py      # 初始化 Label 约束/索引（可重复执行，不删除数据）
+python scripts/kg_build_from_lore.py # LLM 抽取 lore 的实体/关系并写入图谱
 ```
 
 常用验证查询（Neo4j Browser）：
 
 ```cypher
-MATCH (n:Entity) RETURN n LIMIT 50;
-MATCH (a:Entity)-[r]->(b:Entity) RETURN a, r, b LIMIT 100;
+MATCH (n) RETURN labels(n) AS labels, n.id AS id, n.name AS name LIMIT 50;
+MATCH (a)-[r]->(b) RETURN labels(a) AS a_labels, a.name AS a_name, type(r) AS rel, labels(b) AS b_labels, b.name AS b_name LIMIT 100;
 ```
 
 ## 详细运行与配置
@@ -257,8 +258,9 @@ python scripts/import_persona.py
 
 - `import_lore.py`：把 `lore/` 下的文本切片后写入统一 memory（`memory_type=world`）。
 - `import_persona.py`：读取 `lore/persona/*.md`，按 `npc_id` 导入角色设定到统一 memory（`memory_type=persona`，支持去重）。
-- `kg_init_neo4j.py`：初始化 Neo4j 约束与索引（`Entity.id` 唯一等）。
-- `kg_build_from_lore.py`：从 `lore/` 构建实体关系图并写入 Neo4j。
+- `kg_reset_neo4j.py`：清空 Neo4j 当前数据库中的节点与关系（重建图谱时使用）。
+- `kg_init_neo4j.py`：初始化 Neo4j Label 约束与索引（按各 Label 的 `id` 唯一、`name` 索引）。
+- `kg_build_from_lore.py`：使用 LLM 从 `lore/` 抽取实体/关系/Label 并写入 Neo4j。
 
 ### `npc_mcp/`
 
@@ -345,6 +347,7 @@ python run.py
 - MCP 服务已启动（例如在另一个终端运行）：
   - `python npc_mcp/local_server.py`
 - Neo4j 已启动并已导入图谱（至少执行过一次）：
+  - `python scripts/kg_reset_neo4j.py`（仅需要重建时执行）
   - `python scripts/kg_init_neo4j.py`
   - `python scripts/kg_build_from_lore.py`
 
