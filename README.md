@@ -295,43 +295,6 @@ python run.py
 10. 返回 `ActionResponse` 的 JSON 给游戏客户端，游戏引擎据此执行对话/动作表现。
 11. 后台异步任务（不阻塞响应）：调用 `persist_long_term_dialogue_memory()`，先让 LLM 判定 `dialogue_tier`（`important/daily`），`daily` 先摘要再写入 ChromaDB。
 
-## 全链路调用示例（从前端到输出）
-
-1. 前端调用接口：`POST http://localhost:5000/chat`
-2. 请求体（JSON）：
-
-```json
-{
-  "player_id": "player_001",
-  "message": "你好，你叫什么名字？",
-  "scene_info": { "location": "村口", "time": "早晨" },
-  "npc_id": "npc_guard_001"
-}
-```
-
-1. 后端处理与调用函数链路（一次请求的关键路径）：
-  1. `app/main.py` `/chat`：读取 JSON -> 调用 `agent_graph.invoke()`
-  2. `app/langgraph_agent.py`：`retrieve(LongTermMemory.search_*)` -> `get_short_term_history(ShortTermMemory.get_recent)` -> `build_prompt(build_messages)` -> `prepare_tools(build_tooling)` -> `agent(llm_step_with_tools) <-> tools(run_tool_call)` -> `update_short_term(ShortTermMemory.add_turn)`
-  3. `app/main.py`：返回响应后通过后台线程池调用 `persist_long_term_dialogue_memory()` 完成长记忆分级沉淀
-  4. `app/reasoning/llm.py`：提供单步 LLM 调用、工具执行，以及对话记忆分级/摘要函数
-2. 响应体（200，JSON，示例）：
-
-```json
-{
-  "action_type": "dialogue",
-  "dialogue": "我是城门守卫罗恩。请出示你的通行证或说明来意。",
-  "emotion": "严肃",
-  "extra": {
-    "job": "守卫",
-    "location": {
-      "x": 5,
-      "y": 5,
-      "z": 0
-    },
-    "task": "看守城门"
-  }
-}
-```
 
 ## 全链路调用示例（同时调用本地 tool + MCP tool）
 

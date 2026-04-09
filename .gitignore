@@ -29,3 +29,5 @@ models/
 # 日志
 *.log
 logs/
+
+dialogue_memory_dump.json
