@@ -1,15 +1,24 @@
 """ Flask 应用：Gateway 与路由 """
+import atexit
 import logging
+from concurrent.futures import ThreadPoolExecutor
 from typing import Any
 
 from flask import Flask, request, jsonify, render_template
 
 from app.config import load_config
+from app.langgraph_agent import build_agent_graph, persist_long_term_dialogue_memory
 from app.schemas.request import ChatRequest
 from app.reasoning.llm import reply_to_action
-from app.langgraph_agent import build_agent_graph
 
 logger = logging.getLogger(__name__)
+_memory_executor = ThreadPoolExecutor(max_workers=2, thread_name_prefix="long-term-memory")
+atexit.register(lambda: _memory_executor.shutdown(wait=False, cancel_futures=False))
+
+
+def _preview(text: str, limit: int = 300) -> str:
+    t = (text or "").replace("\n", "\\n")
+    return t if len(t) <= limit else t[:limit] + "..."
 
 
 def create_app(config_path: str | None = None) -> Flask:
@@ -17,7 +26,7 @@ def create_app(config_path: str | None = None) -> Flask:
     if config_path:
         load_config(config_path)
 
-    # LangGraph 编排的最简链路（单链路：RAG -> Prompt -> LLM tools -> 写回Chroma）
+    # LangGraph 主链路：RAG -> Prompt -> LLM tools -> 短期记忆；长期记忆改为后台异步写入
     agent_graph = build_agent_graph()
     logger.info("Flask app created. LangGraph pipeline is ready.")
 
@@ -72,10 +81,25 @@ def create_app(config_path: str | None = None) -> Flask:
             if action is None:
                 action = reply_to_action("（思考中……）")
             logger.info(
-                "Chat request completed. player_id=%s npc_id=%s action_type=%s",
+                "Chat request completed. player_id=%s npc_id=%s action_type=%s dialogue_len=%s dialogue=%s",
                 req.player_id,
                 req.npc_id,
                 action.action_type,
+                len(action.dialogue or ""),
+                _preview(action.dialogue or ""),
+            )
+            _memory_executor.submit(
+                persist_long_term_dialogue_memory,
+                player_id=req.player_id,
+                npc_id=req.npc_id,
+                message=req.message,
+                npc_dialogue=action.dialogue,
+                scene_info=req.scene_info or {},
+            )
+            logger.info(
+                "Long-term memory async task submitted. player_id=%s npc_id=%s",
+                req.player_id,
+                req.npc_id,
             )
             return jsonify(action.model_dump(exclude_none=True)), 200
         except Exception as e:

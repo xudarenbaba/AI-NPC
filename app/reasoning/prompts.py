@@ -9,7 +9,8 @@ def build_messages(
     short_term_history: list[dict[str, Any]] | None = None,
     world_chunks: list[str] | None = None,
     persona_chunks: list[str] | None = None,
-    dialogue_chunks: list[str] | None = None,
+    dialogue_daily_chunks: list[str] | None = None,
+    dialogue_important_chunks: list[str] | None = None,
     system_extra: str | None = None,
 ) -> list[dict[str, Any]]:
     """
@@ -32,9 +33,12 @@ def build_messages(
     if persona_chunks:
         system_parts.append("\n【角色设定（当前 NPC）】\n")
         system_parts.append("\n".join(persona_chunks))
-    if dialogue_chunks:
-        system_parts.append("\n【你与该玩家的长期互动记忆】\n")
-        system_parts.append("\n".join(dialogue_chunks))
+    if dialogue_important_chunks:
+        system_parts.append("\n【你与该玩家的重要长期记忆（优先参考）】\n")
+        system_parts.append("\n".join(dialogue_important_chunks))
+    if dialogue_daily_chunks:
+        system_parts.append("\n【你与该玩家的日常长期记忆（摘要）】\n")
+        system_parts.append("\n".join(dialogue_daily_chunks))
     system_content = "\n".join(system_parts)
 
     user_parts = []

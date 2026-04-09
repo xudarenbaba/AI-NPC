@@ -1,4 +1,4 @@
-"""LangGraph 编排（规范版）：RAG(Chroma) -> Prompt -> (agent <-> tools 循环) -> 写回 Chroma。"""
+"""LangGraph 编排（规范版）：RAG(Chroma) -> Prompt -> (agent <-> tools 循环) -> 更新短期记忆。"""
 
 from __future__ import annotations
 
@@ -13,6 +13,7 @@ from app.memory.short_term import ShortTermMemory
 from app.memory.long_term import LongTermMemory
 from app.reasoning.llm import (
     build_tooling,
+    classify_and_prepare_dialogue_memory,
     llm_step_with_tools,
     parse_tool_args,
     reply_to_action,
@@ -24,6 +25,11 @@ from app.schemas.response import ActionResponse
 logger = logging.getLogger(__name__)
 
 
+def _preview(text: str, limit: int = 300) -> str:
+    t = (text or "").replace("\n", "\\n")
+    return t if len(t) <= limit else t[:limit] + "..."
+
+
 class AgentState(TypedDict, total=False):
     player_id: str
     npc_id: str | None
@@ -33,7 +39,8 @@ class AgentState(TypedDict, total=False):
     short_term_history: list[dict[str, Any]]
     world_chunks: list[str]
     persona_chunks: list[str]
-    dialogue_chunks: list[str]
+    dialogue_daily_chunks: list[str]
+    dialogue_important_chunks: list[str]
     messages: list[dict[str, Any]]
     action: ActionResponse
 
@@ -42,6 +49,64 @@ class AgentState(TypedDict, total=False):
     mcp_tools_by_name: dict[str, dict[str, Any]]
     # MCP client 对象放 state 里只为本次 invoke 使用（不序列化）
     mcp_client: Any
+
+
+def persist_long_term_dialogue_memory(
+    *,
+    player_id: str,
+    npc_id: str | None,
+    message: str,
+    npc_dialogue: str,
+    scene_info: dict[str, Any] | None,
+) -> None:
+    """后台任务：分层 + 写入长期记忆。"""
+    logger.info(
+        "Long-term memory task started. player_id=%s npc_id=%s player_message_len=%s npc_dialogue_len=%s",
+        player_id,
+        npc_id,
+        len(message or ""),
+        len(npc_dialogue or ""),
+    )
+    cfg = load_config()
+    if not cfg.get("use_consolidation", True):
+        logger.info("Skip long-term write: consolidation disabled.")
+        return
+    if not player_id:
+        logger.info("Skip long-term write: empty player_id.")
+        return
+
+    min_chars = int(cfg.get("memory", {}).get("dialogue_store_min_chars", 0))
+    if len((npc_dialogue or "").strip()) < min_chars:
+        logger.info("Skip long-term write: dialogue too short. min=%s", min_chars)
+        return
+
+    dialogue_tier, processed_text = classify_and_prepare_dialogue_memory(
+        player_message=message,
+        npc_dialogue=npc_dialogue,
+        scene_info=scene_info or {},
+    )
+    logger.info(
+        "Long-term memory classified. player_id=%s npc_id=%s tier=%s processed_len=%s processed_text=%s",
+        player_id,
+        npc_id,
+        dialogue_tier,
+        len(processed_text or ""),
+        _preview(processed_text or "", limit=500),
+    )
+    LongTermMemory().add_dialogue(
+        npc_id=npc_id,
+        player_id=player_id,
+        texts=[processed_text],
+        dialogue_tier=dialogue_tier,
+        scene_info=scene_info or {},
+    )
+    logger.info(
+        "Long-term memory stored. player_id=%s npc_id=%s tier=%s text=%s",
+        player_id,
+        npc_id,
+        dialogue_tier,
+        _preview(processed_text or "", limit=500),
+    )
 
 
 def build_agent_graph():
@@ -54,7 +119,8 @@ def build_agent_graph():
         if not cfg.get("use_rag", True):
             state["world_chunks"] = []
             state["persona_chunks"] = []
-            state["dialogue_chunks"] = []
+            state["dialogue_daily_chunks"] = []
+            state["dialogue_important_chunks"] = []
             logger.info("RAG disabled by config.")
             return state
 
@@ -75,18 +141,21 @@ def build_agent_graph():
 
         world_chunks = long_term.search_world(query)
         persona_chunks = long_term.search_persona(query, npc_id)
-        dialogue_chunks = long_term.search_dialogue(query, npc_id, player_id)
+        dialogue_daily_chunks = long_term.search_dialogue_daily(query, npc_id, player_id)
+        dialogue_important_chunks = long_term.search_dialogue_important(query, npc_id, player_id)
 
         state["world_chunks"] = world_chunks or []
         state["persona_chunks"] = persona_chunks or []
-        state["dialogue_chunks"] = dialogue_chunks or []
+        state["dialogue_daily_chunks"] = dialogue_daily_chunks or []
+        state["dialogue_important_chunks"] = dialogue_important_chunks or []
         logger.info(
-            "RAG retrieve done. player_id=%s npc_id=%s world=%s persona=%s dialogue=%s",
+            "RAG retrieve done. player_id=%s npc_id=%s world=%s persona=%s dialogue_daily=%s dialogue_important=%s",
             player_id,
             npc_id,
             len(state["world_chunks"]),
             len(state["persona_chunks"]),
-            len(state["dialogue_chunks"]),
+            len(state["dialogue_daily_chunks"]),
+            len(state["dialogue_important_chunks"]),
         )
         return state
 
@@ -110,7 +179,8 @@ def build_agent_graph():
             short_term_history=state.get("short_term_history") or None,
             world_chunks=state.get("world_chunks") or None,
             persona_chunks=state.get("persona_chunks") or None,
-            dialogue_chunks=state.get("dialogue_chunks") or None,
+            dialogue_daily_chunks=state.get("dialogue_daily_chunks") or None,
+            dialogue_important_chunks=state.get("dialogue_important_chunks") or None,
         )
         logger.info("Prompt built. messages=%s", len(state["messages"]))
         return state
@@ -222,9 +292,9 @@ def build_agent_graph():
         return state
 
     def route_from_agent(state: AgentState):
-        # 有最终 action：直接写回记忆并结束
+        # 有最终 action：更新短期记忆并结束
         if state.get("action") is not None:
-            return "store_memory"
+            return "update_short_term"
         # 有 tool_calls：继续执行工具并回到 agent
         messages = state.get("messages") or []
         if messages and (messages[-1] or {}).get("tool_calls"):
@@ -233,42 +303,10 @@ def build_agent_graph():
         return END
 
     def route_from_tools(state: AgentState):
-        # tools 节点若已产生最终 action，则进入写回
+        # tools 节点若已产生最终 action，则更新短期记忆
         if state.get("action") is not None:
-            return "store_memory"
+            return "update_short_term"
         return "agent"
-
-    def store_memory(state: AgentState) -> AgentState:
-        # 把本轮交互写入 ChromaDB（让下一轮能被 RAG 检索到）
-        cfg = load_config()
-        if not cfg.get("use_consolidation", True):
-            logger.info("Consolidation disabled by config.")
-            return state
-
-        player_id = state.get("player_id") or ""
-        npc_id = state.get("npc_id")
-        message = state.get("message") or ""
-        scene_info = state.get("scene_info") or {}
-        action = state.get("action")
-        if not player_id or not action:
-            return state
-        min_chars = int(cfg.get("memory", {}).get("dialogue_store_min_chars", 0))
-        if len((action.dialogue or "").strip()) < min_chars:
-            logger.info("Skip long-term write: dialogue too short. min=%s", min_chars)
-            return state
-
-        text = f"玩家说：{message}；NPC 回复：{action.dialogue}"
-        if scene_info:
-            text = f"[场景 {scene_info}] " + text
-
-        long_term.add_dialogue(
-            npc_id=npc_id,
-            player_id=player_id,
-            texts=[text],
-            scene_info=scene_info,
-        )
-        logger.info("Long-term memory stored. player_id=%s npc_id=%s", player_id, npc_id)
-        return state
 
     def update_short_term(state: AgentState) -> AgentState:
         player_id = state.get("player_id") or ""
@@ -291,7 +329,6 @@ def build_agent_graph():
     graph_builder.add_node("prepare_tools", prepare_tools)
     graph_builder.add_node("agent", agent)
     graph_builder.add_node("tools", tools)
-    graph_builder.add_node("store_memory", store_memory)
     graph_builder.add_node("update_short_term", update_short_term)
 
     graph_builder.set_entry_point("retrieve")
@@ -301,7 +338,6 @@ def build_agent_graph():
     graph_builder.add_edge("prepare_tools", "agent")
     graph_builder.add_conditional_edges("agent", route_from_agent)
     graph_builder.add_conditional_edges("tools", route_from_tools)
-    graph_builder.add_edge("store_memory", "update_short_term")
     graph_builder.add_edge("update_short_term", END)
 
     return graph_builder.compile()

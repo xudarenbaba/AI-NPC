@@ -12,6 +12,12 @@ from app.tools.location_tools import resolve_location_coordinates
 
 logger = logging.getLogger(__name__)
 
+
+def _preview(text: str, limit: int = 300) -> str:
+    t = (text or "").replace("\n", "\\n")
+    return t if len(t) <= limit else t[:limit] + "..."
+
+
 # 与 ActionResponse 对应的 Function Calling schema，供 DeepSeek 使用
 NPC_ACTION_TOOL = {
     "type": "function",
@@ -247,6 +253,85 @@ def call_llm(
     if not choice or not choice.message:
         return ""
     return (choice.message.content or "").strip()
+
+
+def classify_and_prepare_dialogue_memory(
+    *,
+    player_message: str,
+    npc_dialogue: str,
+    scene_info: dict[str, Any] | None = None,
+) -> tuple[str, str]:
+    """
+    使用 LLM 对对话记忆进行分层：
+    - important: 原文保留
+    - daily: 返回压缩总结文本
+    返回 (dialogue_tier, processed_text)。
+    """
+    scene_text = json.dumps(scene_info or {}, ensure_ascii=False)
+    raw_text = f"玩家说：{player_message}；NPC 回复：{npc_dialogue}"
+    if scene_info:
+        raw_text = f"[场景 {scene_text}] " + raw_text
+
+    system_prompt = (
+        "你是 NPC 长期记忆分层器。"
+        "你只能返回 JSON，不要输出任何额外解释。\n"
+        "返回格式必须是："
+        '{"dialogue_tier":"daily|important","processed_text":"..."}。\n'
+        "规则：\n"
+        "1) important：玩家提供了需要长期准确保留的关键信息（身份、关系、偏好、承诺、约定、任务关键事实等）。\n"
+        "2) daily：普通闲聊或低价值信息，需压缩为 1-3 句摘要。\n"
+        "3) 若为 important，processed_text 必须保持原文，不允许改写。\n"
+        "4) 若为 daily，processed_text 应简洁、可检索、保留核心语义。"
+    )
+    user_prompt = (
+        f"scene_info={scene_text}\n"
+        f"player_message={player_message}\n"
+        f"npc_dialogue={npc_dialogue}\n"
+        "请输出 JSON。"
+    )
+    logger.info(
+        "Classify memory request. player_message_len=%s npc_dialogue_len=%s player_message=%s npc_dialogue=%s",
+        len(player_message or ""),
+        len(npc_dialogue or ""),
+        _preview(player_message or ""),
+        _preview(npc_dialogue or ""),
+    )
+
+    try:
+        content = call_llm(
+            [
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_prompt},
+            ]
+        )
+        data = json.loads(content)
+        tier = (data.get("dialogue_tier") or "").strip()
+        processed = (data.get("processed_text") or "").strip()
+        if tier not in {"daily", "important"}:
+            raise ValueError("invalid dialogue_tier")
+        if not processed:
+            raise ValueError("empty processed_text")
+        if tier == "important":
+            logger.info(
+                "Classify memory result. tier=important output_len=%s output=%s",
+                len(raw_text),
+                _preview(raw_text, limit=500),
+            )
+            return tier, raw_text
+        logger.info(
+            "Classify memory result. tier=daily output_len=%s output=%s",
+            len(processed),
+            _preview(processed, limit=500),
+        )
+        return tier, processed
+    except Exception as e:
+        logger.warning("Dialogue memory classify failed. Fallback to important. detail=%s", e)
+        logger.info(
+            "Classify memory fallback output. tier=important output_len=%s output=%s",
+            len(raw_text),
+            _preview(raw_text, limit=500),
+        )
+        return "important", raw_text
 
 
 def _action_from_args(args: dict[str, Any]) -> ActionResponse:

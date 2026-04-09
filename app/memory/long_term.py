@@ -1,4 +1,5 @@
 """长期记忆：单集合 + metadata 分类（world/persona/dialogue）。"""
+import logging
 import uuid
 from datetime import datetime, timezone
 import hashlib
@@ -10,6 +11,8 @@ from chromadb.config import Settings
 from sentence_transformers import SentenceTransformer
 
 from app.config import load_config
+
+logger = logging.getLogger(__name__)
 
 
 def _get_embedding_model():
@@ -59,7 +62,8 @@ class LongTermMemory:
         mem = cfg.get("memory", {})
         self._k_world = int(mem.get("k_world", 3))
         self._k_persona = int(mem.get("k_persona", 3))
-        self._k_dialogue = int(mem.get("k_dialogue", 5))
+        self._k_dialogue_daily = int(mem.get("k_dialogue_daily", 3))
+        self._k_dialogue_important = int(mem.get("k_dialogue_important", 5))
 
     def _get_collection(self, name: str):
         return self._client.get_or_create_collection(
@@ -150,15 +154,19 @@ class LongTermMemory:
         player_id: str,
         texts: list[str],
         *,
+        dialogue_tier: str,
         scene_info: dict[str, Any] | None = None,
         ids: list[str] | None = None,
     ) -> list[str]:
+        if dialogue_tier not in {"daily", "important"}:
+            raise ValueError("dialogue_tier must be 'daily' or 'important'")
         now = datetime.now(timezone.utc).isoformat()
         npc_value = npc_id or "default"
         scene = str(scene_info) if scene_info else ""
         metas = [
             {
                 "memory_type": "dialogue",
+                "dialogue_tier": dialogue_tier,
                 "scope": "npc_player",
                 "npc_id": npc_value,
                 "player_id": player_id,
@@ -168,7 +176,16 @@ class LongTermMemory:
             }
             for _ in texts
         ]
-        return self.add_memory(texts=texts, metadatas=metas, ids=ids)
+        out_ids = self.add_memory(texts=texts, metadatas=metas, ids=ids)
+        logger.info(
+            "LongTermMemory.add_dialogue done. npc_id=%s player_id=%s tier=%s count=%s first_text=%s",
+            npc_value,
+            player_id,
+            dialogue_tier,
+            len(texts),
+            (texts[0].replace("\n", "\\n")[:500] + "...") if texts and len(texts[0]) > 500 else (texts[0].replace("\n", "\\n") if texts else ""),
+        )
+        return out_ids
 
     def search_world(self, query: str, k: int | None = None) -> list[str]:
         return self._query_documents(
@@ -184,7 +201,7 @@ class LongTermMemory:
             k=k or self._k_persona,
         )
 
-    def search_dialogue(
+    def search_dialogue_daily(
         self,
         query: str,
         npc_id: str | None,
@@ -195,8 +212,27 @@ class LongTermMemory:
             query,
             where={
                 "memory_type": "dialogue",
+                "dialogue_tier": "daily",
                 "npc_id": npc_id or "default",
                 "player_id": player_id,
             },
-            k=k or self._k_dialogue,
+            k=k or self._k_dialogue_daily,
+        )
+
+    def search_dialogue_important(
+        self,
+        query: str,
+        npc_id: str | None,
+        player_id: str,
+        k: int | None = None,
+    ) -> list[str]:
+        return self._query_documents(
+            query,
+            where={
+                "memory_type": "dialogue",
+                "dialogue_tier": "important",
+                "npc_id": npc_id or "default",
+                "player_id": player_id,
+            },
+            k=k or self._k_dialogue_important,
         )
