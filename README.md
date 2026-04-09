@@ -58,8 +58,7 @@ python run.py
 - **KG 检索**：在 `retrieve_kg` 节点执行。LLM 先把玩家问题解析为“实体 + Label + 关系意图”，再按 Label 到 Neo4j 检索该实体的关联子图（出入边），整理为 `kg_facts`（`head relation tail`）并注入 `【知识图谱事实（高优先级）】` 区块。
 - **推理**：把召回片段拼入 system/user prompt，要求模型通过 `npc_action` 工具输出结构化动作。
 - **写回沉淀**：短期记忆在主链路同步更新；长期记忆在返回响应后异步分级写回 ChromaDB（受 `use_consolidation` 控制）。
-
-![langgraph结构图](images/img0.png)
+架构图：images/img0.png
 
 ## 记忆系统设计
 
