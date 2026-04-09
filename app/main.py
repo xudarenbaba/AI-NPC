@@ -1,6 +1,7 @@
 """ Flask 应用：Gateway 与路由 """
 import atexit
 import logging
+import uuid
 from concurrent.futures import ThreadPoolExecutor
 from typing import Any
 
@@ -44,6 +45,7 @@ def create_app(config_path: str | None = None) -> Flask:
     @app.route("/chat", methods=["POST"])
     def chat() -> tuple[Any, int]:
         """接收游戏状态与玩家对话，返回 NPC 动作指令 JSON"""
+        request_id = uuid.uuid4().hex[:12]
         try:
             body = request.get_json(force=True, silent=True)
             if not body:
@@ -57,7 +59,8 @@ def create_app(config_path: str | None = None) -> Flask:
             if not req.player_id or not req.message:
                 return jsonify({"error": "player_id and message are required"}), 400
             logger.info(
-                "Chat request accepted. player_id=%s npc_id=%s message_len=%s message=%s",
+                "Chat request accepted. rid=%s player_id=%s npc_id=%s message_len=%s message=%s",
+                request_id,
                 req.player_id,
                 req.npc_id,
                 len(req.message),
@@ -74,6 +77,7 @@ def create_app(config_path: str | None = None) -> Flask:
                     "npc_id": req.npc_id,
                     "message": req.message,
                     "scene_info": req.scene_info or {},
+                    "request_id": request_id,
                 },
                 {"recursion_limit": 20},
             )
@@ -81,7 +85,8 @@ def create_app(config_path: str | None = None) -> Flask:
             if action is None:
                 action = reply_to_action("（思考中……）")
             logger.info(
-                "Chat request completed. player_id=%s npc_id=%s action_type=%s dialogue_len=%s dialogue=%s",
+                "Chat request completed. rid=%s player_id=%s npc_id=%s action_type=%s dialogue_len=%s dialogue=%s",
+                request_id,
                 req.player_id,
                 req.npc_id,
                 action.action_type,
@@ -95,9 +100,11 @@ def create_app(config_path: str | None = None) -> Flask:
                 message=req.message,
                 npc_dialogue=action.dialogue,
                 scene_info=req.scene_info or {},
+                request_id=request_id,
             )
             logger.info(
-                "Long-term memory async task submitted. player_id=%s npc_id=%s",
+                "Long-term memory async task submitted. rid=%s player_id=%s npc_id=%s",
+                request_id,
                 req.player_id,
                 req.npc_id,
             )

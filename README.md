@@ -111,7 +111,7 @@ python run.py
 | player_id  | string | 是   | 玩家唯一标识       |
 | message    | string | 是   | 玩家当前对话内容     |
 | scene_info | object | 否   | 场景信息（地点、时间等） |
-| npc_id     | string | 是   | 当前对话的 NPC 标识 |
+| npc_id     | string | 否   | 当前对话的 NPC 标识（不传时使用默认角色上下文） |
 
 
 
@@ -203,7 +203,7 @@ python scripts/import_persona.py
 - `app/memory/`
   - `__init__.py`：导出记忆模块。
   - `short_term.py`：短期记忆模块（按 `player_id+npc_id` 维护最近对话轮次）。
-  - `long_term.py`：长期记忆与 RAG（ChromaDB 单集合 + metadata 分类，提供 `search_world/search_persona/search_dialogue` 与 `add_world/add_persona/add_dialogue`）。
+  - `long_term.py`：长期记忆与 RAG（ChromaDB 单集合 + metadata 分类，提供 `search_world/search_persona/search_dialogue_important/search_dialogue_daily` 与 `add_world/add_persona/add_dialogue`）。
 - `app/integrations/`
   - `mcp_client.py`：MCP 客户端封装，使用 stdio 连接 `npc_mcp/local_server.py`，提供 `list_tools()` / `call_tool()`。
 - `app/reasoning/`（推理）
@@ -245,7 +245,7 @@ python scripts/import_persona.py
 - 在本机：访问 `http://localhost:5000/health`、`http://localhost:5000/chat`
 - 在同局域网其它机器：访问 `http://<你的服务器IP>:5000/health`、`http://<你的服务器IP>:5000/chat`
 
-注意：这里没有 UI 页面，只有 API 接口（游戏客户端/引擎需要直接调用这些 HTTP 地址）。
+注意：本项目核心能力是 API；另外提供 `GET /` 的最简调试页面（`app/templates/index.html`）。
 
 ## MCP 启动与联动
 

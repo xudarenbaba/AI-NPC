@@ -156,6 +156,7 @@ class LongTermMemory:
         *,
         dialogue_tier: str,
         scene_info: dict[str, Any] | None = None,
+        request_id: str | None = None,
         ids: list[str] | None = None,
     ) -> list[str]:
         if dialogue_tier not in {"daily", "important"}:
@@ -178,7 +179,8 @@ class LongTermMemory:
         ]
         out_ids = self.add_memory(texts=texts, metadatas=metas, ids=ids)
         logger.info(
-            "LongTermMemory.add_dialogue done. npc_id=%s player_id=%s tier=%s count=%s first_text=%s",
+            "LongTermMemory.add_dialogue done. rid=%s npc_id=%s player_id=%s tier=%s count=%s first_text=%s",
+            request_id,
             npc_value,
             player_id,
             dialogue_tier,

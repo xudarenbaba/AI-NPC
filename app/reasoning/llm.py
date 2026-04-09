@@ -128,6 +128,7 @@ def llm_step_with_tools(
     tool_defs: list[dict[str, Any]],
     temperature: float | None = None,
     timeout: int | None = None,
+    request_id: str | None = None,
 ) -> dict[str, Any]:
     """单步调用 LLM：返回一条可直接 append 到 messages 的 assistant message(dict)。"""
     cfg = load_config()
@@ -168,7 +169,8 @@ def llm_step_with_tools(
     if assistant_tool_calls:
         out["tool_calls"] = assistant_tool_calls
     logger.info(
-        "LLM step response parsed. content_len=%s tool_calls=%s",
+        "LLM step response parsed. rid=%s content_len=%s tool_calls=%s",
+        request_id,
         len(out.get("content") or ""),
         len(assistant_tool_calls),
     )
@@ -260,6 +262,7 @@ def classify_and_prepare_dialogue_memory(
     player_message: str,
     npc_dialogue: str,
     scene_info: dict[str, Any] | None = None,
+    request_id: str | None = None,
 ) -> tuple[str, str]:
     """
     使用 LLM 对对话记忆进行分层：
@@ -290,7 +293,8 @@ def classify_and_prepare_dialogue_memory(
         "请输出 JSON。"
     )
     logger.info(
-        "Classify memory request. player_message_len=%s npc_dialogue_len=%s player_message=%s npc_dialogue=%s",
+        "Classify memory request. rid=%s player_message_len=%s npc_dialogue_len=%s player_message=%s npc_dialogue=%s",
+        request_id,
         len(player_message or ""),
         len(npc_dialogue or ""),
         _preview(player_message or ""),
@@ -313,21 +317,28 @@ def classify_and_prepare_dialogue_memory(
             raise ValueError("empty processed_text")
         if tier == "important":
             logger.info(
-                "Classify memory result. tier=important output_len=%s output=%s",
+                "Classify memory result. rid=%s tier=important output_len=%s output=%s",
+                request_id,
                 len(raw_text),
                 _preview(raw_text, limit=500),
             )
             return tier, raw_text
         logger.info(
-            "Classify memory result. tier=daily output_len=%s output=%s",
+            "Classify memory result. rid=%s tier=daily output_len=%s output=%s",
+            request_id,
             len(processed),
             _preview(processed, limit=500),
         )
         return tier, processed
     except Exception as e:
-        logger.warning("Dialogue memory classify failed. Fallback to important. detail=%s", e)
+        logger.warning(
+            "Dialogue memory classify failed. rid=%s fallback=important detail=%s",
+            request_id,
+            e,
+        )
         logger.info(
-            "Classify memory fallback output. tier=important output_len=%s output=%s",
+            "Classify memory fallback output. rid=%s tier=important output_len=%s output=%s",
+            request_id,
             len(raw_text),
             _preview(raw_text, limit=500),
         )

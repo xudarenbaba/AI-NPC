@@ -31,6 +31,7 @@ def _preview(text: str, limit: int = 300) -> str:
 
 
 class AgentState(TypedDict, total=False):
+    request_id: str
     player_id: str
     npc_id: str | None
     message: str
@@ -58,10 +59,12 @@ def persist_long_term_dialogue_memory(
     message: str,
     npc_dialogue: str,
     scene_info: dict[str, Any] | None,
+    request_id: str | None = None,
 ) -> None:
     """后台任务：分层 + 写入长期记忆。"""
     logger.info(
-        "Long-term memory task started. player_id=%s npc_id=%s player_message_len=%s npc_dialogue_len=%s",
+        "Long-term memory task started. rid=%s player_id=%s npc_id=%s player_message_len=%s npc_dialogue_len=%s",
+        request_id,
         player_id,
         npc_id,
         len(message or ""),
@@ -69,24 +72,26 @@ def persist_long_term_dialogue_memory(
     )
     cfg = load_config()
     if not cfg.get("use_consolidation", True):
-        logger.info("Skip long-term write: consolidation disabled.")
+        logger.info("Skip long-term write: rid=%s consolidation disabled.", request_id)
         return
     if not player_id:
-        logger.info("Skip long-term write: empty player_id.")
+        logger.info("Skip long-term write: rid=%s empty player_id.", request_id)
         return
 
     min_chars = int(cfg.get("memory", {}).get("dialogue_store_min_chars", 0))
     if len((npc_dialogue or "").strip()) < min_chars:
-        logger.info("Skip long-term write: dialogue too short. min=%s", min_chars)
+        logger.info("Skip long-term write: rid=%s dialogue too short. min=%s", request_id, min_chars)
         return
 
     dialogue_tier, processed_text = classify_and_prepare_dialogue_memory(
         player_message=message,
         npc_dialogue=npc_dialogue,
         scene_info=scene_info or {},
+        request_id=request_id,
     )
     logger.info(
-        "Long-term memory classified. player_id=%s npc_id=%s tier=%s processed_len=%s processed_text=%s",
+        "Long-term memory classified. rid=%s player_id=%s npc_id=%s tier=%s processed_len=%s processed_text=%s",
+        request_id,
         player_id,
         npc_id,
         dialogue_tier,
@@ -99,9 +104,11 @@ def persist_long_term_dialogue_memory(
         texts=[processed_text],
         dialogue_tier=dialogue_tier,
         scene_info=scene_info or {},
+        request_id=request_id,
     )
     logger.info(
-        "Long-term memory stored. player_id=%s npc_id=%s tier=%s text=%s",
+        "Long-term memory stored. rid=%s player_id=%s npc_id=%s tier=%s text=%s",
+        request_id,
         player_id,
         npc_id,
         dialogue_tier,
@@ -115,13 +122,14 @@ def build_agent_graph():
     long_term = LongTermMemory()
 
     def retrieve(state: AgentState) -> AgentState:
+        request_id = state.get("request_id")
         cfg = load_config()
         if not cfg.get("use_rag", True):
             state["world_chunks"] = []
             state["persona_chunks"] = []
             state["dialogue_daily_chunks"] = []
             state["dialogue_important_chunks"] = []
-            logger.info("RAG disabled by config.")
+            logger.info("RAG disabled by config. rid=%s", request_id)
             return state
 
         player_id = state.get("player_id") or ""
@@ -149,7 +157,8 @@ def build_agent_graph():
         state["dialogue_daily_chunks"] = dialogue_daily_chunks or []
         state["dialogue_important_chunks"] = dialogue_important_chunks or []
         logger.info(
-            "RAG retrieve done. player_id=%s npc_id=%s world=%s persona=%s dialogue_daily=%s dialogue_important=%s",
+            "RAG retrieve done. rid=%s player_id=%s npc_id=%s world=%s persona=%s dialogue_daily=%s dialogue_important=%s",
+            request_id,
             player_id,
             npc_id,
             len(state["world_chunks"]),
@@ -160,11 +169,13 @@ def build_agent_graph():
         return state
 
     def get_short_term_history(state: AgentState) -> AgentState:
+        request_id = state.get("request_id")
         player_id = state.get("player_id") or ""
         npc_id = state.get("npc_id")
         state["short_term_history"] = short_term.get_recent(player_id, npc_id=npc_id)
         logger.info(
-            "Short-term history loaded. player_id=%s npc_id=%s turns=%s",
+            "Short-term history loaded. rid=%s player_id=%s npc_id=%s turns=%s",
+            request_id,
             player_id,
             npc_id,
             len(state["short_term_history"]),
@@ -172,6 +183,7 @@ def build_agent_graph():
         return state
 
     def build_prompt(state: AgentState) -> AgentState:
+        request_id = state.get("request_id")
         state["messages"] = build_messages(
             player_message=state.get("message") or "",
             npc_id=state.get("npc_id"),
@@ -182,39 +194,47 @@ def build_agent_graph():
             dialogue_daily_chunks=state.get("dialogue_daily_chunks") or None,
             dialogue_important_chunks=state.get("dialogue_important_chunks") or None,
         )
-        logger.info("Prompt built. messages=%s", len(state["messages"]))
+        logger.info("Prompt built. rid=%s messages=%s", request_id, len(state["messages"]))
         return state
 
     def prepare_tools(state: AgentState) -> AgentState:
+        request_id = state.get("request_id")
         tool_defs, mcp_client, mcp_tools_by_name = build_tooling()
         state["tool_defs"] = tool_defs
         state["mcp_client"] = mcp_client
         state["mcp_tools_by_name"] = mcp_tools_by_name
         logger.info(
-            "Tooling prepared. total_tools=%s mcp_tools=%s",
+            "Tooling prepared. rid=%s total_tools=%s mcp_tools=%s",
+            request_id,
             len(tool_defs),
             len(mcp_tools_by_name),
         )
         return state
 
     def agent(state: AgentState) -> AgentState:
+        request_id = state.get("request_id")
         messages = state.get("messages") or []
         tool_defs = state.get("tool_defs") or []
-        assistant_msg = llm_step_with_tools(messages, tool_defs)
+        assistant_msg = llm_step_with_tools(messages, tool_defs, request_id=request_id)
         messages = list(messages) + [assistant_msg]
         state["messages"] = messages
 
         # 若模型没走 tools，直接返回文本时兜底为 ActionResponse
         tool_calls = assistant_msg.get("tool_calls") or []
-        logger.info("LLM step finished. tool_calls=%s", len(tool_calls))
+        logger.info("LLM step finished. rid=%s tool_calls=%s", request_id, len(tool_calls))
         if not tool_calls:
             content = (assistant_msg.get("content") or "").strip()
             if content:
                 state["action"] = reply_to_action(content)
-                logger.info("LLM produced direct action fallback.")
+                logger.info(
+                    "LLM produced direct action fallback. rid=%s dialogue=%s",
+                    request_id,
+                    _preview(content),
+                )
         return state
 
     def tools(state: AgentState) -> AgentState:
+        request_id = state.get("request_id")
         messages = state.get("messages") or []
         if not messages:
             return state
@@ -270,7 +290,12 @@ def build_agent_graph():
                     target_id=target_id,
                     extra=extra,
                 )
-                logger.info("npc_action parsed. action_type=%s", action_type)
+                logger.info(
+                    "npc_action parsed. rid=%s action_type=%s dialogue=%s",
+                    request_id,
+                    action_type,
+                    _preview(dialogue),
+                )
                 continue
 
             tool_result = run_tool_call(
@@ -287,7 +312,7 @@ def build_agent_graph():
                     "content": _tool_result_with_template(tool_name, tool_result),
                 }
             )
-            logger.info("Tool result appended. tool_name=%s", tool_name)
+            logger.info("Tool result appended. rid=%s tool_name=%s", request_id, tool_name)
         state["messages"] = new_messages
         return state
 
@@ -309,6 +334,7 @@ def build_agent_graph():
         return "agent"
 
     def update_short_term(state: AgentState) -> AgentState:
+        request_id = state.get("request_id")
         player_id = state.get("player_id") or ""
         npc_id = state.get("npc_id")
         message = state.get("message") or ""
@@ -319,7 +345,7 @@ def build_agent_graph():
         # 写入短期对话：先用户，再 NPC（保持与原始逻辑一致）
         short_term.add_turn(player_id, "user", message, npc_id)
         short_term.add_turn(player_id, "assistant", action.dialogue, npc_id)
-        logger.info("Short-term memory updated. player_id=%s npc_id=%s", player_id, npc_id)
+        logger.info("Short-term memory updated. rid=%s player_id=%s npc_id=%s", request_id, player_id, npc_id)
         return state
 
     graph_builder = StateGraph(AgentState)
