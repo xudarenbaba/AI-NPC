@@ -1,12 +1,12 @@
 # AI NPC 后端
 
-为游戏中的 NPC 提供具备**长期记忆、世界观感知与结构化动作决策**的 AI 后端。使用 **LangGraph 编排**串联：RAG(ChromaDB) -> Prompt -> LLM Function Calling -> 短期记忆同步更新，并在响应后异步沉淀长期记忆，与游戏引擎通过 HTTP JSON 对接。
+为游戏中的 NPC 提供具备**长期记忆、世界观感知、知识图谱检索与结构化动作决策**的 AI 后端。使用 **LangGraph 编排**串联：RAG(ChromaDB) + KG(Neo4j) -> Prompt -> LLM Function Calling -> 短期记忆同步更新，并在响应后异步沉淀长期记忆，与游戏引擎通过 HTTP JSON 对接。
 
 ## 项目是做什么的
 
 - 这是一个面向游戏的 **NPC 决策服务**（后端 API），不是完整游戏客户端。
 - 游戏侧通过 `POST /chat` 发送玩家输入和场景信息，本服务返回结构化动作（`dialogue/move/emote/use_item/idle`）。
-- 服务内部会做 RAG 检索（世界观 + 分级交互记忆）、工具调用（本地工具 + MCP 工具）和记忆沉淀。
+- 服务内部会做 RAG 检索（世界观 + 分级交互记忆）、KG 检索（实体关系事实）、工具调用（本地工具 + MCP 工具）和记忆沉淀。
 
 ## 快速启动
 
@@ -46,7 +46,7 @@ python run.py
 游戏客户端 (前端) ←—— HTTP POST /chat(JSON) ——→ AI 决策端(Flask，本服务)
                                              ↓
                                  LangGraph 图编排主流程
-                   retrieve(RAG) -> get_short_term_history -> build_prompt -> prepare_tools -> agent <-> tools -> update_short_term
+                   retrieve(RAG) -> retrieve_kg(Neo4j) -> get_short_term_history -> build_prompt -> prepare_tools -> agent <-> tools -> update_short_term
                                              ↓
                                     LLM(Function Calling)输出标准动作 JSON
                                              ↓
@@ -55,6 +55,7 @@ python run.py
 
 - **Gateway**：`POST /chat` 接收 `player_id`、`message`、`scene_info`、可选 `npc_id`，返回动作 JSON。
 - **RAG 检索**：ChromaDB(长期记忆) 按 metadata 分类检索四路片段（世界观 / 角色设定 / 重要对话 / 日常对话摘要）。
+- **KG 检索**：Neo4j 根据问题词元匹配实体并召回关系事实（`head relation tail`），作为高优先级知识注入 prompt。
 - **推理**：把召回片段拼入 system/user prompt，要求模型通过 `npc_action` 工具输出结构化动作。
 - **写回沉淀**：短期记忆在主链路同步更新；长期记忆在返回响应后异步分级写回 ChromaDB（受 `use_consolidation` 控制）。
 
@@ -83,6 +84,28 @@ python run.py
 - **短期记忆（内存）**：主链路内同步写入（先 user 后 assistant），确保下一轮立刻可见
 - **长期记忆（Chroma）**：在返回前端响应后由后台异步任务写入，避免阻塞接口响应
 - **长期写入门槛**：仍受 `use_consolidation` 与 `memory.dialogue_store_min_chars` 控制
+
+## 知识图谱（KG）设计
+
+系统引入 Neo4j 作为结构化知识层，和向量记忆并行检索：
+
+- **离线构建（Phase1）**：从 `lore/world.md` 与 `lore/persona/*.md` 抽取实体与关系并写入 Neo4j
+- **在线检索（Phase2）**：每轮在 `retrieve_kg` 节点按玩家问题匹配实体并检索邻接关系
+- **Prompt 融合**：以 `【知识图谱事实（高优先级）】` 区块注入，模型被要求优先遵守图谱事实
+
+相关脚本：
+
+```bash
+python scripts/kg_init_neo4j.py      # 初始化约束/索引（通常一次）
+python scripts/kg_build_from_lore.py # 从 lore 构建并导入图谱（可重复执行）
+```
+
+常用验证查询（Neo4j Browser）：
+
+```cypher
+MATCH (n:Entity) RETURN n LIMIT 50;
+MATCH (a:Entity)-[r]->(b:Entity) RETURN a, r, b LIMIT 100;
+```
 
 ## 详细运行与配置
 
@@ -146,6 +169,9 @@ python run.py
 | mcp.enabled                     | 是否启用 MCP 工具动态发现与调用                        |
 | mcp.command                     | 启动 MCP 服务进程的命令（默认当前 python）               |
 | mcp.args                        | 启动 MCP 服务参数（默认 `npc_mcp/local_server.py`） |
+| knowledge_graph.enabled         | 是否启用知识图谱在线检索（Neo4j）                      |
+| knowledge_graph.neo4j.*         | Neo4j 连接配置（uri/user/password/database）          |
+| knowledge_graph.retrieval.*     | KG 检索参数（max_entities/max_facts/edge_limit）     |
 
 
 ## 世界观 (Lore) 导入
@@ -193,6 +219,7 @@ python scripts/import_persona.py
 - `app/__init__.py`：包初始化文件（用于 Python 模块识别）。
 - `app/config.py`：加载 `config.yaml`，并支持环境变量 `AI_NPC_LLM_API_KEY` 覆盖敏感的 LLM `api_key`。
 - `app/langgraph_agent.py`：LangGraph 主链路编排实现（retrieve -> get_short_term_history -> build_prompt -> prepare_tools -> agent <-> tools -> update_short_term），并提供长期记忆异步沉淀函数。
+- `app/langgraph_agent.py`：LangGraph 主链路编排实现（retrieve -> retrieve_kg -> get_short_term_history -> build_prompt -> prepare_tools -> agent <-> tools -> update_short_term），并提供长期记忆异步沉淀函数。
 - `app/main.py`：Web Gateway 与路由实现。
   - `GET /health`：健康检查。
   - `POST /chat`：核心对话接口（接收状态 -> 组装 prompt -> 调用 LLM -> 输出动作 JSON -> 记忆更新与沉淀）。
@@ -206,6 +233,9 @@ python scripts/import_persona.py
   - `long_term.py`：长期记忆与 RAG（ChromaDB 单集合 + metadata 分类，提供 `search_world/search_persona/search_dialogue_important/search_dialogue_daily` 与 `add_world/add_persona/add_dialogue`）。
 - `app/integrations/`
   - `mcp_client.py`：MCP 客户端封装，使用 stdio 连接 `npc_mcp/local_server.py`，提供 `list_tools()` / `call_tool()`。
+- `app/knowledge_graph/`
+  - `client.py`：Neo4j 查询封装（实体匹配与邻接关系查询）。
+  - `retriever.py`：KG 检索编排（问题词元提取、实体命中、事实排序与格式化）。
 - `app/reasoning/`（推理）
   - `__init__.py`：导出推理相关方法（prompt/llm 调用）。
   - `prompts.py`：把“场景信息 + RAG 召回内容 + 当前玩家消息”组装成发送给 LLM 的消息（system/user）。
@@ -227,6 +257,8 @@ python scripts/import_persona.py
 
 - `import_lore.py`：把 `lore/` 下的文本切片后写入统一 memory（`memory_type=world`）。
 - `import_persona.py`：读取 `lore/persona/*.md`，按 `npc_id` 导入角色设定到统一 memory（`memory_type=persona`，支持去重）。
+- `kg_init_neo4j.py`：初始化 Neo4j 约束与索引（`Entity.id` 唯一等）。
+- `kg_build_from_lore.py`：从 `lore/` 构建实体关系图并写入 Neo4j。
 
 ### `npc_mcp/`
 
@@ -277,40 +309,50 @@ python run.py
     - `state.persona_chunks: list[str]`（当前 NPC 的角色设定）
     - `state.dialogue_important_chunks: list[str]`（当前 NPC 与玩家的重要长期记忆）
     - `state.dialogue_daily_chunks: list[str]`（当前 NPC 与玩家的日常摘要记忆）
-5. LangGraph 节点 `get_short_term_history`：调用 `ShortTermMemory.get_recent()`
+5. LangGraph 节点 `retrieve_kg`：调用 KG 检索（`app/knowledge_graph/retriever.py`）
+  - 输入：`message / npc_id`
+  - 输出：
+    - `state.kg_entities: list[str]`（命中的实体名称）
+    - `state.kg_facts: list[str]`（格式化后的关系事实）
+6. LangGraph 节点 `get_short_term_history`：调用 `ShortTermMemory.get_recent()`
   - 输入：`player_id / npc_id`  
   - 输出：`state.short_term_history: list[{"role","content"}]`
-6. LangGraph 节点 `build_prompt`：调用 `build_messages()` 组装给 LLM 的 `messages`
-  - 输入：`message / npc_id / scene_info / short_term_history / world_chunks / persona_chunks / dialogue_important_chunks / dialogue_daily_chunks`
+7. LangGraph 节点 `build_prompt`：调用 `build_messages()` 组装给 LLM 的 `messages`
+  - 输入：`message / npc_id / scene_info / short_term_history / world_chunks / persona_chunks / kg_facts / dialogue_important_chunks / dialogue_daily_chunks`
   - 输出：`state.messages`
-7. LangGraph 节点 `prepare_tools`：构建本轮可用 tools schema（包含 `npc_action`、本地 `resolve_location_coordinates`、以及通过 MCP 动态发现的工具）。
+8. LangGraph 节点 `prepare_tools`：构建本轮可用 tools schema（包含 `npc_action`、本地 `resolve_location_coordinates`、以及通过 MCP 动态发现的工具）。
   - 重要：`get_npc_runtime_state` **只允许通过 MCP 调用**（不会回退到本地共享函数）。
   - 工具描述已增强：明确了“何时调用本地坐标工具 / 何时调用 MCP 状态工具 / 何时必须输出 npc_action”，降低模型漏调工具概率。
-8. LangGraph 进入循环：`agent <-> tools`（由图的条件边决定是否继续调用工具）。
+9. LangGraph 进入循环：`agent <-> tools`（由图的条件边决定是否继续调用工具）。
   - `agent`：单步调用 LLM（`llm_step_with_tools()`），拿到 `tool_calls` 或最终内容  
   - `tools`：执行工具并把结果以 `role=tool` 追加回 `state.messages`；同时对工具返回值附带“结果解释模板”（`RAW_RESULT_JSON` + `RESULT_EXPLANATION_TEMPLATE`），降低模型误读工具返回值的概率  
   - 当模型产生 `npc_action` tool_call 时：解析为 `state.action: ActionResponse` 并结束循环  
   - 防死循环：由 LangGraph 的 `recursion_limit` 控制最大回合数（而不是在 `llm.py` 写死 4 次）
-9. LangGraph 节点 `update_short_term`：写入短期记忆（先 user 再 assistant），用于下一轮 prompt。
-10. 返回 `ActionResponse` 的 JSON 给游戏客户端，游戏引擎据此执行对话/动作表现。
-11. 后台异步任务（不阻塞响应）：调用 `persist_long_term_dialogue_memory()`，先让 LLM 判定 `dialogue_tier`（`important/daily`），`daily` 先摘要再写入 ChromaDB。
+10. LangGraph 节点 `update_short_term`：写入短期记忆（先 user 再 assistant），用于下一轮 prompt。
+11. 返回 `ActionResponse` 的 JSON 给游戏客户端，游戏引擎据此执行对话/动作表现。
+12. 后台异步任务（不阻塞响应）：调用 `persist_long_term_dialogue_memory()`，先让 LLM 判定 `dialogue_tier`（`important/daily`），`daily` 先摘要再写入 ChromaDB。
 
 
-## 全链路调用示例（同时调用本地 tool + MCP tool）
+## 全链路调用示例（KG + 本地 tool + MCP tool）
 
-下面示例展示：模型在同一个步骤里同时触发 **本地工具** `resolve_location_coordinates` 和 **MCP 工具** `get_npc_runtime_state`，并最终输出 `npc_action`。
+下面示例展示：一轮请求中同时经过 **RAG 检索 + KG 检索 + 本地工具 + MCP 工具**，最终输出 `npc_action`。
 
 ### 前提
 
-- `config.yaml` 中 `mcp.enabled: true`
+- `config.yaml` 中：
+  - `mcp.enabled: true`
+  - `knowledge_graph.enabled: true`
 - MCP 服务已启动（例如在另一个终端运行）：
   - `python npc_mcp/local_server.py`
+- Neo4j 已启动并已导入图谱（至少执行过一次）：
+  - `python scripts/kg_init_neo4j.py`
+  - `python scripts/kg_build_from_lore.py`
 
 ### 1. 前端请求
 
 `POST http://localhost:5000/chat`
 
-请求体（JSON）示例（该输入会在同一轮触发本地 tool + MCP tool）：
+请求体（JSON）示例（该输入会触发 KG 命中，并在同一轮触发本地 tool + MCP tool）：
 
 ```json
 {
@@ -333,10 +375,14 @@ python run.py
       - `state.persona_chunks: list[str]`（当前 NPC 角色设定）
       - `state.dialogue_important_chunks: list[str]`（当前 NPC 与玩家重要历史）
       - `state.dialogue_daily_chunks: list[str]`（当前 NPC 与玩家日常摘要历史）
+  - `retrieve_kg`：`retrieve_kg_facts()`  
+    - 输出（示例）：
+      - `state.kg_entities = ["马修（行商）", "酒馆"]`
+      - `state.kg_facts = ["马修（行商） HAS_TASK 售卖补给", "马修（行商） CAN_DO dialogue", "马修（行商） LOCATED_IN 村口"]`
   - `get_short_term_history`：`ShortTermMemory.get_recent()`  
     - 输出：`state.short_term_history: list[{"role","content"}]`
   - `build_prompt`：`build_messages(...)`  
-    - 输入：`state.short_term_history / state.world_chunks / state.persona_chunks / state.dialogue_important_chunks / state.dialogue_daily_chunks / state.message...`
+    - 输入：`state.short_term_history / state.world_chunks / state.persona_chunks / state.kg_facts / state.dialogue_important_chunks / state.dialogue_daily_chunks / state.message...`
     - 输出：`state.messages`
   - `prepare_tools`：`build_tooling()`  
     - 输出：`state.tool_defs`（包含本地工具 schema + MCP 动态工具 schema）
@@ -360,7 +406,17 @@ python run.py
 6. 后台异步沉淀：
   - 行为：`persist_long_term_dialogue_memory()` 使用 LLM 产出 `dialogue_tier + processed_text`，再调用 `LongTermMemory.add_dialogue()` 写回 ChromaDB（当 `use_consolidation=true`）
 
-### 3. 响应体（200，JSON，示例）
+### 3. 关键日志（含 KG 命中与 Prompt 注入）
+
+```text
+... | INFO | app.knowledge_graph.retriever | KG query tokens. rid=ab12cd34ef56 tokens=['运行状态','坐标','任务','酒馆','npc_merchant_001']
+... | INFO | app.knowledge_graph.retriever | KG seed entities matched. rid=ab12cd34ef56 count=2 entities=['马修（行商）','酒馆']
+... | INFO | app.knowledge_graph.retriever | KG facts retrieved. rid=ab12cd34ef56 count=3 facts=['马修（行商） HAS_TASK 售卖补给','马修（行商） CAN_DO dialogue','马修（行商） LOCATED_IN 村口']
+... | INFO | app.langgraph_agent | KG retrieval node done. rid=ab12cd34ef56 entities=['马修（行商）','酒馆'] facts=['马修（行商） HAS_TASK 售卖补给', ...]
+... | INFO | app.langgraph_agent | Prompt built. rid=ab12cd34ef56 messages=2 system_prompt=...【知识图谱事实（高优先级）】...
+```
+
+### 4. 响应体（200，JSON，示例）
 
 ```json
 {

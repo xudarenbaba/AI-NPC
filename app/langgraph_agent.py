@@ -9,6 +9,7 @@ from typing import Any, TypedDict
 from langgraph.graph import END, StateGraph
 
 from app.config import load_config
+from app.knowledge_graph.retriever import retrieve_kg_facts
 from app.memory.short_term import ShortTermMemory
 from app.memory.long_term import LongTermMemory
 from app.reasoning.llm import (
@@ -40,6 +41,8 @@ class AgentState(TypedDict, total=False):
     short_term_history: list[dict[str, Any]]
     world_chunks: list[str]
     persona_chunks: list[str]
+    kg_facts: list[str]
+    kg_entities: list[str]
     dialogue_daily_chunks: list[str]
     dialogue_important_chunks: list[str]
     messages: list[dict[str, Any]]
@@ -182,6 +185,25 @@ def build_agent_graph():
         )
         return state
 
+    def retrieve_kg(state: AgentState) -> AgentState:
+        request_id = state.get("request_id")
+        message = state.get("message") or ""
+        npc_id = state.get("npc_id")
+        facts, entities = retrieve_kg_facts(
+            message=message,
+            npc_id=npc_id,
+            request_id=request_id,
+        )
+        state["kg_facts"] = facts
+        state["kg_entities"] = entities
+        logger.info(
+            "KG retrieval node done. rid=%s entities=%s facts=%s",
+            request_id,
+            entities,
+            facts,
+        )
+        return state
+
     def build_prompt(state: AgentState) -> AgentState:
         request_id = state.get("request_id")
         state["messages"] = build_messages(
@@ -191,10 +213,19 @@ def build_agent_graph():
             short_term_history=state.get("short_term_history") or None,
             world_chunks=state.get("world_chunks") or None,
             persona_chunks=state.get("persona_chunks") or None,
+            kg_facts=state.get("kg_facts") or None,
             dialogue_daily_chunks=state.get("dialogue_daily_chunks") or None,
             dialogue_important_chunks=state.get("dialogue_important_chunks") or None,
         )
-        logger.info("Prompt built. rid=%s messages=%s", request_id, len(state["messages"]))
+        system_preview = _preview((state["messages"][0] or {}).get("content", ""), limit=1500) if state.get("messages") else ""
+        user_preview = _preview((state["messages"][1] or {}).get("content", ""), limit=1000) if state.get("messages") else ""
+        logger.info(
+            "Prompt built. rid=%s messages=%s system_prompt=%s user_prompt=%s",
+            request_id,
+            len(state["messages"]),
+            system_preview,
+            user_preview,
+        )
         return state
 
     def prepare_tools(state: AgentState) -> AgentState:
@@ -350,6 +381,7 @@ def build_agent_graph():
 
     graph_builder = StateGraph(AgentState)
     graph_builder.add_node("retrieve", retrieve)
+    graph_builder.add_node("retrieve_kg", retrieve_kg)
     graph_builder.add_node("get_short_term_history", get_short_term_history)
     graph_builder.add_node("build_prompt", build_prompt)
     graph_builder.add_node("prepare_tools", prepare_tools)
@@ -358,7 +390,8 @@ def build_agent_graph():
     graph_builder.add_node("update_short_term", update_short_term)
 
     graph_builder.set_entry_point("retrieve")
-    graph_builder.add_edge("retrieve", "get_short_term_history")
+    graph_builder.add_edge("retrieve", "retrieve_kg")
+    graph_builder.add_edge("retrieve_kg", "get_short_term_history")
     graph_builder.add_edge("get_short_term_history", "build_prompt")
     graph_builder.add_edge("build_prompt", "prepare_tools")
     graph_builder.add_edge("prepare_tools", "agent")

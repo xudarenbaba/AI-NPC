@@ -55,6 +55,12 @@ def _default_config() -> dict[str, Any]:
             "args": None,
         },
         "knowledge_graph": {
+            "enabled": True,
+            "retrieval": {
+                "max_entities": 6,
+                "max_facts": 8,
+                "edge_limit": 80,
+            },
             "neo4j": {
                 "uri": "neo4j://127.0.0.1:7687",
                 "user": "neo4j",

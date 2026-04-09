@@ -9,6 +9,7 @@ def build_messages(
     short_term_history: list[dict[str, Any]] | None = None,
     world_chunks: list[str] | None = None,
     persona_chunks: list[str] | None = None,
+    kg_facts: list[str] | None = None,
     dialogue_daily_chunks: list[str] | None = None,
     dialogue_important_chunks: list[str] | None = None,
     system_extra: str | None = None,
@@ -33,6 +34,10 @@ def build_messages(
     if persona_chunks:
         system_parts.append("\n【角色设定（当前 NPC）】\n")
         system_parts.append("\n".join(persona_chunks))
+    if kg_facts:
+        system_parts.append("\n【知识图谱事实（高优先级）】\n")
+        system_parts.append("\n".join(kg_facts))
+        system_parts.append("若知识图谱事实与默认推断冲突，优先遵守知识图谱事实；不确定时明确说明不知道。")
     if dialogue_important_chunks:
         system_parts.append("\n【你与该玩家的重要长期记忆（优先参考）】\n")
         system_parts.append("\n".join(dialogue_important_chunks))
