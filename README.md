@@ -55,7 +55,7 @@ python run.py
 
 - **Gateway**：`POST /chat` 接收 `player_id`、`message`、`scene_info`、可选 `npc_id`，返回动作 JSON。
 - **RAG 检索**：ChromaDB(长期记忆) 按 metadata 分类检索四路片段（世界观 / 角色设定 / 重要对话 / 日常对话摘要）。
-- **KG 检索**：Neo4j 根据问题词元匹配实体并召回关系事实（`head relation tail`），作为高优先级知识注入 prompt。
+- **KG 检索**：LLM 先解析问题得到实体+Label+关系意图，再到 Neo4j 召回子图事实（`head relation tail`），作为高优先级知识注入 prompt。
 - **推理**：把召回片段拼入 system/user prompt，要求模型通过 `npc_action` 工具输出结构化动作。
 - **写回沉淀**：短期记忆在主链路同步更新；长期记忆在返回响应后异步分级写回 ChromaDB（受 `use_consolidation` 控制）。
 
@@ -89,8 +89,8 @@ python run.py
 
 系统引入 Neo4j 作为结构化知识层，和向量记忆并行检索：
 
-- **离线构建（Phase1）**：从 `lore/world.md` 与 `lore/persona/*.md` 抽取实体与关系并写入 Neo4j
-- **在线检索（Phase2）**：每轮在 `retrieve_kg` 节点按玩家问题匹配实体并检索邻接关系
+- **离线构建（Phase1）**：LLM 从 `lore/world.md` 与 `lore/persona/*.md` 抽取实体/关系/Label 并写入 Neo4j
+- **在线检索（Phase2）**：每轮在 `retrieve_kg` 节点用 LLM 解析问题（实体+Label+关系意图），再按 Label 检索邻接关系
 - **Prompt 融合**：以 `【知识图谱事实（高优先级）】` 区块注入，模型被要求优先遵守图谱事实
 
 相关脚本：
@@ -219,7 +219,6 @@ python scripts/import_persona.py
 
 - `app/__init__.py`：包初始化文件（用于 Python 模块识别）。
 - `app/config.py`：加载 `config.yaml`，并支持环境变量 `AI_NPC_LLM_API_KEY` 覆盖敏感的 LLM `api_key`。
-- `app/langgraph_agent.py`：LangGraph 主链路编排实现（retrieve -> get_short_term_history -> build_prompt -> prepare_tools -> agent <-> tools -> update_short_term），并提供长期记忆异步沉淀函数。
 - `app/langgraph_agent.py`：LangGraph 主链路编排实现（retrieve -> retrieve_kg -> get_short_term_history -> build_prompt -> prepare_tools -> agent <-> tools -> update_short_term），并提供长期记忆异步沉淀函数。
 - `app/main.py`：Web Gateway 与路由实现。
   - `GET /health`：健康检查。
@@ -235,8 +234,9 @@ python scripts/import_persona.py
 - `app/integrations/`
   - `mcp_client.py`：MCP 客户端封装，使用 stdio 连接 `npc_mcp/local_server.py`，提供 `list_tools()` / `call_tool()`。
 - `app/knowledge_graph/`
-  - `client.py`：Neo4j 查询封装（实体匹配与邻接关系查询）。
-  - `retriever.py`：KG 检索编排（问题词元提取、实体命中、事实排序与格式化）。
+  - `schema.py`：KG Label/关系白名单与稳定实体 ID 规则（导入与检索共用）。
+  - `client.py`：Neo4j 查询封装（按 Label 查实体与邻接关系）。
+  - `retriever.py`：KG 检索编排（LLM 解析问题 -> Label 检索 -> 事实排序与格式化）。
 - `app/reasoning/`（推理）
   - `__init__.py`：导出推理相关方法（prompt/llm 调用）。
   - `prompts.py`：把“场景信息 + RAG 召回内容 + 当前玩家消息”组装成发送给 LLM 的消息（system/user）。
@@ -412,9 +412,10 @@ python run.py
 ### 3. 关键日志（含 KG 命中与 Prompt 注入）
 
 ```text
-... | INFO | app.knowledge_graph.retriever | KG query tokens. rid=ab12cd34ef56 tokens=['运行状态','坐标','任务','酒馆','npc_merchant_001']
-... | INFO | app.knowledge_graph.retriever | KG seed entities matched. rid=ab12cd34ef56 count=2 entities=['马修（行商）','酒馆']
-... | INFO | app.knowledge_graph.retriever | KG facts retrieved. rid=ab12cd34ef56 count=3 facts=['马修（行商） HAS_TASK 售卖补给','马修（行商） CAN_DO dialogue','马修（行商） LOCATED_IN 村口']
+... | INFO | app.knowledge_graph.retriever | KG query parsed by LLM. rid=ab12cd34ef56 entities=[{'name':'马修','label':'Character'}] relations=['HAS_TASK','LOCATED_IN']
+... | INFO | app.knowledge_graph.retriever | KG seed entities matched. rid=ab12cd34ef56 count=1 entities=['马修(Character)']
+... | INFO | app.knowledge_graph.retriever | KG neighbor edges fetched. rid=ab12cd34ef56 rows=5
+... | INFO | app.knowledge_graph.retriever | KG facts retrieved. rid=ab12cd34ef56 count=3 facts=['马修 HAS_TASK 售卖补给','马修 CAN_DO dialogue','马修 LOCATED_IN 村口']
 ... | INFO | app.langgraph_agent | KG retrieval node done. rid=ab12cd34ef56 entities=['马修（行商）','酒馆'] facts=['马修（行商） HAS_TASK 售卖补给', ...]
 ... | INFO | app.langgraph_agent | Prompt built. rid=ab12cd34ef56 messages=2 system_prompt=...【知识图谱事实（高优先级）】...
 ```
