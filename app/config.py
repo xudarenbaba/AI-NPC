@@ -54,4 +54,12 @@ def _default_config() -> dict[str, Any]:
             "command": None,
             "args": None,
         },
+        "knowledge_graph": {
+            "neo4j": {
+                "uri": "neo4j://127.0.0.1:7687",
+                "user": "neo4j",
+                "password": "",
+                "database": "neo4j",
+            }
+        },
     }
