@@ -55,7 +55,7 @@ python run.py
 
 - **Gateway**：`POST /chat` 接收 `player_id`、`message`、`scene_info`、可选 `npc_id`，返回动作 JSON。
 - **RAG 检索**：ChromaDB(长期记忆) 按 metadata 分类检索四路片段（世界观 / 角色设定 / 重要对话 / 日常对话摘要）。
-- **KG 检索**：LLM 先解析问题得到实体+Label+关系意图，再到 Neo4j 召回子图事实（`head relation tail`），作为高优先级知识注入 prompt。
+- **KG 检索**：在 `retrieve_kg` 节点执行。LLM 先把玩家问题解析为“实体 + Label + 关系意图”，再按 Label 到 Neo4j 检索该实体的关联子图（出入边），整理为 `kg_facts`（`head relation tail`）并注入 `【知识图谱事实（高优先级）】` 区块。
 - **推理**：把召回片段拼入 system/user prompt，要求模型通过 `npc_action` 工具输出结构化动作。
 - **写回沉淀**：短期记忆在主链路同步更新；长期记忆在返回响应后异步分级写回 ChromaDB（受 `use_consolidation` 控制）。
 
