@@ -96,7 +96,6 @@ python run.py
 相关脚本：
 
 ```bash
-python scripts/kg_reset_neo4j.py     # 清空当前 Neo4j 数据（重建时使用）
 python scripts/kg_init_neo4j.py      # 初始化 Label 约束/索引（可重复执行，不删除数据）
 python scripts/kg_build_from_lore.py # LLM 抽取 lore 的实体/关系并写入图谱
 ```
