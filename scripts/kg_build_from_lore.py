@@ -27,6 +27,14 @@ from app.reasoning.llm import call_llm
 logger = logging.getLogger(__name__)
 
 
+def _labels_enum_text() -> str:
+    return "|".join(sorted(ALLOWED_LABELS))
+
+
+def _relations_enum_text() -> str:
+    return "|".join(sorted(ALLOWED_RELATIONS))
+
+
 @dataclass(frozen=True)
 class Entity:
     id: str
@@ -66,14 +74,24 @@ def _extract_json(content: str) -> dict[str, Any]:
 
 
 def extract_graph_from_chunk(*, chunk: str, source_file: str) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    labels_text = _labels_enum_text()
+    relations_text = _relations_enum_text()
     system_prompt = (
         "你是知识图谱抽取器。只输出 JSON，不要输出其它文本。\n"
         "输出格式："
-        '{"entities":[{"name":"...","label":"Character|Location|Organization|Item|Quest|Event|Concept","aliases":["..."]}],'
-        '"relations":[{"head_name":"...","head_label":"Character|Location|Organization|Item|Quest|Event|Concept",'
-        '"relation":"LOCATED_IN|AFFILIATED_WITH|HAS_ROLE|HAS_TASK|CAN_DO|KNOWS|HOSTILE_TO|TRADES_WITH|REQUIRES|PARTICIPATES_IN",'
-        '"tail_name":"...","tail_label":"Character|Location|Organization|Item|Quest|Event|Concept",'
-        '"confidence":0.0,"evidence":"..."}]}\n'
+        + '{"entities":[{"name":"...","label":"'
+        + labels_text
+        + '","aliases":["..."]}],'
+        + '"relations":[{"head_name":"...","head_label":"'
+        + labels_text
+        + '",'
+        + '"relation":"'
+        + relations_text
+        + '",'
+        + '"tail_name":"...","tail_label":"'
+        + labels_text
+        + '",'
+        + '"confidence":0.0,"evidence":"..."}]}\n'
         "要求：不要臆造，不确定就不输出。"
     )
     user_prompt = f"source_file={source_file}\ntext={chunk}\n请输出 JSON。"

@@ -13,13 +13,27 @@ from app.reasoning.llm import call_llm
 logger = logging.getLogger(__name__)
 
 
+def _labels_enum_text() -> str:
+    return "|".join(sorted(ALLOWED_LABELS))
+
+
+def _relations_enum_text() -> str:
+    return "|".join(sorted(ALLOWED_RELATIONS))
+
+
 def _parse_query_with_llm(*, message: str, npc_id: str | None, request_id: str | None) -> tuple[list[dict[str, str]], list[str]]:
+    labels_text = _labels_enum_text()
+    relations_text = _relations_enum_text()
     system_prompt = (
         "你是知识图谱查询解析器。"
         "你必须只返回 JSON，不允许输出额外文本。\n"
         "JSON 格式："
-        '{"entities":[{"name":"...","label":"Character|Location|Organization|Item|Quest|Event|Concept"}],'
-        '"relations":["LOCATED_IN|AFFILIATED_WITH|HAS_ROLE|HAS_TASK|CAN_DO|KNOWS|HOSTILE_TO|TRADES_WITH|REQUIRES|PARTICIPATES_IN"]}\n'
+        + '{"entities":[{"name":"...","label":"'
+        + labels_text
+        + '"}],'
+        + '"relations":["'
+        + relations_text
+        + '"]}\n'
         "要求：\n"
         "1) entities 只保留和问题强相关的实体，最多 6 个。\n"
         "2) label 必须使用枚举值。\n"
