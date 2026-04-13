@@ -5,7 +5,7 @@ import pygame
 
 from config import SETTINGS
 from game.layout import npc_spawn_pos
-from game.models import AiAction, NPC, Player
+from game.models import AiAction, NPC, Player, emotion_to_emoji
 from game.npc_profiles import NPC_PROFILES
 
 
@@ -75,24 +75,30 @@ class World:
                 closest_dist = dist
         return closest_npc, closest_dist
 
+    @staticmethod
+    def _dialogue_with_emotion(dialogue: str, emotion: str | None) -> str:
+        emoji = emotion_to_emoji(emotion)
+        text = dialogue.strip()
+        return f"{text} {emoji}" if emoji else text
+
     def apply_action(self, npc: NPC, action: AiAction, now_seconds: float) -> str:
         if action.action_type == "dialogue":
             if action.dialogue.strip():
-                npc.dialogue_text = action.dialogue.strip()
+                npc.dialogue_text = self._dialogue_with_emotion(action.dialogue, action.emotion)
                 npc.dialogue_until = now_seconds + SETTINGS.bubble_duration_seconds
             npc.runtime_state = "dialogue"
             return "success"
 
         if action.action_type == "emote":
             if action.dialogue.strip():
-                npc.dialogue_text = action.dialogue.strip()
+                npc.dialogue_text = self._dialogue_with_emotion(action.dialogue, action.emotion)
                 npc.dialogue_until = now_seconds + SETTINGS.bubble_duration_seconds
             npc.runtime_state = "emote"
             return "success"
 
         if action.action_type == "use_item":
             if action.dialogue.strip():
-                npc.dialogue_text = action.dialogue.strip()
+                npc.dialogue_text = self._dialogue_with_emotion(action.dialogue, action.emotion)
                 npc.dialogue_until = now_seconds + SETTINGS.bubble_duration_seconds
             npc.runtime_state = "use_item"
             return "success"

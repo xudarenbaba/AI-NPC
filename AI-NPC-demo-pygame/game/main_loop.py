@@ -4,7 +4,7 @@ import pygame
 
 from config import SETTINGS
 from game.ai_client import AiClient
-from game.models import NPC
+from game.models import NPC, emotion_to_emoji
 from game.observability import ObservationStore, build_snapshot, export_samples
 from game.window_focus import try_focus_game_window
 from game.ui import UI
@@ -237,13 +237,19 @@ def run_game() -> None:
                                 reply = "（本次未返回台词）"
                             else:
                                 reply = f"（请求失败）{result.error_message}"
+                        else:
+                            emoji = emotion_to_emoji(result.action.emotion)
+                            if emoji:
+                                reply = f"{reply} {emoji}"
                         chat_transcript.append(("npc", reply))
                         snap_transcript_bottom[0] = True
 
                         action_result = world.apply_action(chat_target, result.action, now)
                         chat_target.last_action_result = action_result
                         if result.action.action_type == "idle" and result.action.dialogue.strip():
-                            chat_target.dialogue_text = result.action.dialogue
+                            emoji = emotion_to_emoji(result.action.emotion)
+                            idle_text = result.action.dialogue.strip()
+                            chat_target.dialogue_text = f"{idle_text} {emoji}" if emoji else idle_text
                             chat_target.dialogue_until = now + SETTINGS.bubble_duration_seconds
                         if SETTINGS.obs_enabled:
                             obs.push_event(f"APPLY {action_result} state={chat_target.runtime_state}")
